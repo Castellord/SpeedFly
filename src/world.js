@@ -1,3 +1,5 @@
+import { createValleyMist } from "./air-effects.js";
+import { flightTexture } from "./textures.js";
 import * as THREE from "three";
 import { createVegetation } from "./vegetation.js";
 
@@ -89,28 +91,6 @@ function groundAtlas(rng) {
   map.anisotropy = 4;
   map.needsUpdate = true;
   return map;
-}
-
-let photos;
-function loadPhotos() {
-  if (typeof document === "undefined") return [];
-  if (!photos) {
-    const base = import.meta.env?.BASE_URL || "./";
-    const loader = new THREE.TextureLoader();
-    photos = ["meadow", "cliff"].map((name) =>
-      loader
-        .loadAsync(base + "assets/" + name + ".jpg")
-        .then((texture) => {
-          texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-          texture.anisotropy = 8;
-          // The terrain shader grades these source sRGB values before lighting.
-          texture.colorSpace = THREE.NoColorSpace;
-          return texture;
-        })
-        .catch(() => null),
-    );
-  }
-  return photos;
 }
 
 function landMaterial() {
@@ -249,20 +229,33 @@ function landMaterial() {
           bed=mix(bed,vec3(.19)+shingle*.71,.69);
         }
         surface=mix(surface,bed,riparian*.91);
-        vec3 eddy=texture2D(atlas,vec2(pos.x*.15+sin(pos.z*.24)*.15,pos.z*.058+time*.085)).rgb;
-        // Pale foam is local to the drops and shallow rocks. The bed remains
-        // visible through amber-grey water on the smoother shelves.
-        float boil=smoothstep(.09,.43,steep)+.23*smoothstep(.51,.78,flake.g);
-        float foam=smoothstep(.55,.74,eddy.g+.16*boil+fine*.32);
-        vec3 water=mix(bed*.74,vec3(.31,.415,.41),.43+.38*(1.-smoothstep(.14,.78,channel)));
-        water=mix(water,vec3(.75,.78,.74),foam*(.28+.61*clamp(boil,0.,1.)));
-        surface=mix(surface,water,river);
+        if (river > .001) {
+          vec2 flowUV=vec2(pos.x*.15+sin(pos.z*.24)*.15,pos.z*.058+time*.085);
+          vec3 eddy=texture2D(atlas,flowUV).rgb;
+          float boil=smoothstep(.09,.43,steep)+.23*smoothstep(.51,.78,flake.g);
+          float foam=smoothstep(.55,.74,eddy.g+.16*boil+fine*.32);
+          vec3 water=mix(bed*.74,vec3(.21,.37,.36),.43+.38*(1.-smoothstep(.14,.78,channel)));
+          vec3 eye=normalize(cameraPosition-pos);
+          vec3 ripple=normalize(n+vec3((eddy.r-.5)*.46,0.,(eddy.g-.5)*.34));
+          float grazing=pow(1.-clamp(dot(ripple,eye),0.,1.),3.);
+          float glint=pow(max(dot(ripple,normalize(sun+eye)),0.),46.);
+          water=mix(water,vec3(.63,.74,.79),.48*grazing)+vec3(.70,.62,.48)*glint*env.w;
+          water=mix(water,vec3(.83,.86,.83),foam*(.28+.61*clamp(boil,0.,1.)));
+          surface=mix(surface,water,river);
+        }
         // Let the scans carry fine relief. Differentiating their pixel luminance
         // turns tiny colour changes into sparkling, near-binary surface normals.
         float diffuse = max(dot(n,sun),0.);
         float light = .70 + diffuse*.39;
         vec3 lit = surface * light * mix(vec3(.84,.90,.99),vec3(1.055,1.02,.965),diffuse);
         lit *= mix(vec3(.70,.76,.86),vec3(1.),env.w);
+        // Broad, drifting cloud shadows separate sunlit shoulders from the
+        // cooler valley floor. World-space sampling keeps them fixed on turns.
+        float cloud=texture2D(atlas,(pos.xz+pos.y*.19*sun.xz+time*vec2(.9,.35))/1640.).r;
+        lit *= mix(vec3(.79,.85,.93),vec3(1.07,1.045,1.005),smoothstep(.40,.57,cloud));
+        float distanceHaze = (1.-exp(-length(pos-cameraPosition)*.00015))
+          * (1.-smoothstep(1350.,2580.,pos.y));
+        lit = mix(lit,vec3(.68,.77,.81),distanceHaze*.63);
         gl_FragColor = vec4(pow(max(lit,vec3(.001)),vec3(2.2)),1.);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
@@ -1078,14 +1071,14 @@ export function createWorld(scene, seed) {
     material = landMaterial();
   material.uniforms.atlas.value = atlas;
   material.uniforms.snowline.value = 1960 + 90 * Math.sin(phases[0]);
-  let disposed = false;
-  loadPhotos().forEach((task, i) =>
-    task.then((texture) => {
-      if (disposed || !texture) return;
-      material.uniforms[i === 0 ? "meadowPhoto" : "cliffPhoto"].value = texture;
-      material.uniforms[i === 0 ? "haveMeadow" : "haveCliff"].value = 1;
-    }),
-  );
+  for (const name of ["meadow", "cliff"]) {
+    const texture = flightTexture(name + ".webp");
+    if (!texture) continue;
+    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+    texture.anisotropy = 8;
+    material.uniforms[name + "Photo"].value = texture;
+    material.uniforms[name === "meadow" ? "haveMeadow" : "haveCliff"].value = 1;
+  }
   // Neighbouring tiles share the vertex buffers. Frustum culling discards
   // mountains behind the pilot before their triangles reach the GPU.
   const tiles = [];
@@ -1133,13 +1126,9 @@ export function createWorld(scene, seed) {
       tiles.push(geometry);
     }
   const indices = new THREE.BufferAttribute(reordered, 1);
-  const clock = () => {
-    material.uniforms.time.value = (performance.now() % 1000000) / 1000;
-  };
   for (const geometry of tiles) {
     geometry.setIndex(indices);
     const tile = new THREE.Mesh(geometry, material);
-    tile.onBeforeRender = clock;
     world.add(tile);
   }
 
@@ -1158,6 +1147,13 @@ export function createWorld(scene, seed) {
     lips,
   });
   height = (x, z) => Math.max(groundHeight(x, z), rockFaces.top(x, z));
+  const mist = createValleyMist(
+    world,
+    height,
+    river,
+    atlas,
+    randomSource(seed + "/mist"),
+  );
   const vegetation = createVegetation({
     scene: world,
     seed,
@@ -1176,7 +1172,9 @@ export function createWorld(scene, seed) {
     wallSide,
     lips,
   );
-  function update(x, z, heading) {
+  function update(x, z, heading, time = 0) {
+    material.uniforms.time.value = time;
+    mist.material.uniforms.time.value = time;
     vegetation.update(x, z, heading);
     gravel.update(x, z);
   }
@@ -1187,11 +1185,12 @@ export function createWorld(scene, seed) {
     update,
     hitsObstacle: vegetation.hitsObstacle,
     dispose() {
-      disposed = true;
       scene.remove(world);
       vegetation.dispose();
       gravel.dispose();
       for (const asset of [
+        mist.material,
+        mist.geometry,
         ...rockFaces.resources,
         ...tiles,
         land,

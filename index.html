@@ -11,7 +11,7 @@
       name="description"
       content="Ridgeline — 3D-симулятор спидфлаинга. Выбирай свою линию и пилотируй крыло над процедурными альпийскими долинами."
     />
-    <link rel="icon" href="./mark.svg" />
+    <link rel="icon" href="./src/mark.svg?inline" />
     <title>Ridgeline — симулятор спидфлаинга</title>
   </head>
   <body data-mode="loading">
@@ -71,7 +71,7 @@
           ><span class="scale"></span>
         </div>
       </aside>
-      <section class="brief" id="brief">
+      <section class="brief" id="brief" hidden>
         <div class="line-id">
           <span class="bars"></span><span id="lineNo">ЛИНИЯ 001</span><em></em
           ><label class="line-mode"
@@ -147,7 +147,24 @@
           </button>
         </div>
       </div>
-      <div class="loading" id="loading" role="status">Генерация рельефа…</div>
+      <div class="loading" id="loading">
+        <div class="load-card">
+          <div class="load-heading">
+            <span>Подготовка линии</span
+            ><span id="loadStep" aria-hidden="true">1 / 4</span>
+          </div>
+          <progress
+            id="loadProgress"
+            max="4"
+            value="1"
+            aria-label="Этап подготовки линии"
+          ></progress>
+          <div id="loadStage" role="status">Построение рельефа</div>
+          <button class="secondary" id="retryLoad" hidden>
+            Повторить загрузку
+          </button>
+        </div>
+      </div>
       <div class="toast" id="toast" role="status"></div>
     </main>
     <section class="deck" aria-label="Полётные приборы">

@@ -1,3 +1,4 @@
+import { flightTexture } from "./textures.js";
 import * as THREE from "three";
 
 const TAU = Math.PI * 2;
@@ -31,10 +32,8 @@ function random(seed) {
 }
 
 function forestTexture(name) {
-  if (typeof document === "undefined") return null;
-  const map = new THREE.TextureLoader().load(
-    (import.meta.env?.BASE_URL || "./") + "assets/" + name + ".webp",
-  );
+  const map = flightTexture(name + ".webp");
+  if (!map) return null;
   map.colorSpace = THREE.SRGBColorSpace;
   map.anisotropy = 4;
   return map;
@@ -655,8 +654,12 @@ export function createVegetation({
       0.8 + rng() * 0.31,
     );
   }
-  const batch = (geo, mat, capacity) => {
+  const batch = (geo, mat, capacity, colored = true) => {
     const instance = new THREE.InstancedMesh(geo, mat, Math.max(1, capacity));
+    if (colored) {
+      instance.setColorAt(0, new THREE.Color(0xffffff));
+      instance.instanceColor.setUsage(THREE.DynamicDrawUsage);
+    }
     instance.count = 0;
     instance.frustumCulled = false;
     instance.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -671,6 +674,7 @@ export function createVegetation({
     shadowGeometry,
     shadeMaterial,
     counts.reduce((a, b) => a + b, 0),
+    false,
   );
   const tint = new THREE.Color();
   function append(b, obj) {
@@ -791,8 +795,6 @@ export function createVegetation({
       });
       for (const levels of assets)
         for (const model of levels) model.geo.dispose();
-      atlas?.dispose();
-      distantMap?.dispose();
       distant.dispose();
       needles.dispose();
       solid.dispose();

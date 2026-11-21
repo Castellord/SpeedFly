@@ -8,13 +8,9 @@ function loadScans() {
   scans = Promise.all(
     ["boulder_01", "rock_09"].map(async (name) => {
       const gltf = await loader.loadAsync(
-        import.meta.env.BASE_URL + "assets/models/" + name + ".glb",
+        import.meta.env.BASE_URL + "assets/models/" + name + "-lod.glb",
       );
-      let surface;
-      gltf.scene.traverse((node) => {
-        if (node.isMesh) surface = node;
-      });
-      const { geometry, material } = surface;
+      const { geometry, material } = gltf.scene.getObjectByName("near");
       geometry.computeBoundingBox();
       const box = geometry.boundingBox,
         center = box.getCenter(new THREE.Vector3()),
@@ -66,8 +62,17 @@ function loadScans() {
             }
           }
       }
+      const levels = ["middle", "far"].map((name) => {
+        const level = new THREE.BufferGeometry();
+        for (const [key, attr] of Object.entries(geometry.attributes))
+          level.setAttribute(key, attr);
+        level.setIndex(gltf.scene.getObjectByName(name).geometry.index);
+        level.boundingSphere = geometry.boundingSphere;
+        return level;
+      });
       return {
         geometry,
+        levels,
         material,
         top: (x, z) =>
           Math.max(Math.abs(x), Math.abs(z)) > 0.5
@@ -148,59 +153,72 @@ export function createScannedRocks(scene, world, seed) {
   add(world.center(-448) + 15, -448, 17, 0.65, 0.52, 0);
   add(world.center(-612) - 17, -612, 12, 0.63, 0.18, 1);
   scene.add(root);
-  const ready = loadScans()
-    .then((models) => {
-      if (disposed) return;
-      assets = models;
-      const grouped = new Map();
-      for (const rock of placements) {
-        const tile = Math.floor(rock.z / 170),
-          key = tile * 2 + rock.model;
-        if (!grouped.has(key)) grouped.set(key, []);
-        grouped.get(key).push(rock);
-        for (
-          let k = Math.floor((rock.z - rock.length) / 32);
-          k <= Math.floor((rock.z + rock.length) / 32);
-          k++
-        ) {
-          if (!buckets.has(k)) buckets.set(k, []);
-          buckets.get(k).push(rock);
-        }
+  const ready = loadScans().then((models) => {
+    if (disposed) return;
+    assets = models;
+    const grouped = new Map();
+    for (const rock of placements) {
+      const tile = Math.floor(rock.z / 75),
+        key = tile * 2 + rock.model;
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key).push(rock);
+      for (
+        let k = Math.floor((rock.z - rock.length) / 32);
+        k <= Math.floor((rock.z + rock.length) / 32);
+        k++
+      ) {
+        if (!buckets.has(k)) buckets.set(k, []);
+        buckets.get(k).push(rock);
       }
-      for (const list of grouped.values()) {
-        const model = models[list[0].model];
-        const batch = new THREE.InstancedMesh(
-          model.geometry,
-          model.material,
-          list.length,
+    }
+    for (const list of grouped.values()) {
+      const model = models[list[0].model];
+      const batch = new THREE.InstancedMesh(
+        model.geometry,
+        model.material,
+        list.length,
+      );
+      for (let i = 0; i < list.length; i++) {
+        const rock = list[i];
+        object.position.set(rock.x, rock.base, rock.z);
+        object.rotation.y = rock.angle;
+        object.scale.set(
+          rock.length,
+          rock.length * rock.heightScale,
+          rock.length,
         );
-        for (let i = 0; i < list.length; i++) {
-          const rock = list[i];
-          object.position.set(rock.x, rock.base, rock.z);
-          object.rotation.y = rock.angle;
-          object.scale.set(
-            rock.length,
-            rock.length * rock.heightScale,
-            rock.length,
-          );
-          object.updateMatrix();
-          batch.setMatrixAt(i, object.matrix);
-          const color = new THREE.Color().setScalar(0.68 + (0.2 * (i % 6)) / 5);
-          batch.setColorAt(i, color);
-        }
-        batch.computeBoundingSphere();
-        batches.push(batch);
-        root.add(batch);
+        object.updateMatrix();
+        batch.setMatrixAt(i, object.matrix);
+        const color = new THREE.Color().setScalar(0.68 + (0.2 * (i % 6)) / 5);
+        batch.setColorAt(i, color);
       }
-    })
-    .catch((error) => console.warn("Rock scans unavailable", error.message));
+      batch.computeBoundingSphere();
+      const levels = [
+        batch,
+        ...model.levels.map((geometry) => {
+          const lod = new THREE.InstancedMesh(geometry, model.material, 0);
+          lod.instanceMatrix = batch.instanceMatrix;
+          lod.instanceColor = batch.instanceColor;
+          lod.count = batch.count;
+          lod.boundingSphere = batch.boundingSphere;
+          return lod;
+        }),
+      ];
+      batches.push(levels);
+      root.add(...levels);
+    }
+  });
   return {
     ready,
     update(x, z) {
-      for (const batch of batches) {
-        const c = batch.boundingSphere.center;
-        batch.visible =
-          Math.hypot(c.x - x, c.z - z) < 490 + batch.boundingSphere.radius;
+      for (const levels of batches) {
+        const sphere = levels[0].boundingSphere;
+        const distance =
+          Math.hypot(sphere.center.x - x, sphere.center.z - z) - sphere.radius;
+        const active =
+          distance < 55 ? 0 : distance < 190 ? 1 : distance < 630 ? 2 : -1;
+        for (let i = 0; i < levels.length; i++)
+          levels[i].visible = i === active;
       }
     },
     hits(x, y, z) {
@@ -229,7 +247,7 @@ export function createScannedRocks(scene, world, seed) {
     dispose() {
       disposed = true;
       root.removeFromParent();
-      for (const batch of batches) batch.dispose();
+      for (const levels of batches) for (const mesh of levels) mesh.dispose();
       buckets.clear();
     },
   };

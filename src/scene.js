@@ -1,3 +1,5 @@
+import { createAirEffects } from "./air-effects.js";
+import { flightTexture, texturesReady } from "./textures.js";
 import * as THREE from "three";
 import { createWorld } from "./world.js";
 import { createWing, createCockpit } from "./wing.js";
@@ -18,15 +20,7 @@ export function createScene(canvas) {
     camera = new THREE.PerspectiveCamera(55, 1, 0.15, 15500);
   scene.background = new THREE.Color(0xb9d0db);
   scene.fog = new THREE.Fog(0xb8cbd0, 1450, 10500);
-  new THREE.TextureLoader().load(
-    import.meta.env.BASE_URL + "assets/sky.jpg",
-    (tex) => {
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.mapping = THREE.EquirectangularReflectionMapping;
-      scene.background = tex;
-      scene.backgroundRotation.y = 1.5;
-    },
-  );
+  scene.backgroundRotation.y = 1.5;
   scene.add(new THREE.HemisphereLight(0xe0f0ff, 0xa49a7b, 1.65));
   const sun = new THREE.DirectionalLight(0xffe9c8, 2.1);
   sun.position.set(-0.64, 0.72, -0.26);
@@ -37,6 +31,7 @@ export function createScene(canvas) {
   camera.add(cockpit.group);
   scene.add(camera);
   const courseMarkers = createCourseMarkers(scene);
+  const updateAir = createAirEffects(scene);
   const updateShadow = createWingShadow(scene, sun.position);
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   let scannedRocks,
@@ -54,6 +49,10 @@ export function createScene(canvas) {
     right = new THREE.Vector3(),
     origin = new THREE.Vector3();
   function generate(seed) {
+    const sky = flightTexture("sky.jpg");
+    sky.colorSpace = THREE.SRGBColorSpace;
+    sky.mapping = THREE.EquirectangularReflectionMapping;
+    scene.background = sky;
     scannedRocks?.dispose();
     if (world) world.dispose();
     world = createWorld(scene, seed);
@@ -64,7 +63,11 @@ export function createScene(canvas) {
       terrainObstacles(x, y, z) || rocks.hits(x, y, z);
     flight = createFlight(world, seed);
     courseMarkers.generate(world, flight.gates);
-    return { world, flight, ready: rocks.ready };
+    return {
+      world,
+      flight,
+      ready: Promise.all([rocks.ready, texturesReady()]),
+    };
   }
   function draw({ mode, cameraMode, t, dt, snap }) {
     const s = flight.state,
@@ -186,9 +189,48 @@ export function createScene(canvas) {
       camera.position.x,
       camera.position.z,
       Math.atan2(horizontal.x, -horizontal.z),
+      t,
     );
     scannedRocks.update(camera.position.x, camera.position.z);
+    updateAir(
+      t,
+      s.agl,
+      renderer.domElement.height,
+      !reducedMotion.matches && !preview,
+    );
     renderer.render(scene, camera);
   }
-  return { generate, draw };
+  async function warmup() {
+    await renderer.compileAsync(scene, camera);
+    // Make the renderer initialise buffers, instance attributes and material
+    // textures for the entire line, including objects outside both start views.
+    // Empty draw ranges perform the uploads without rasterising distant meshes.
+    const objects = [],
+      ranges = new Map();
+    scene.traverse((node) => {
+      objects.push([node, node.visible, node.frustumCulled]);
+      node.visible = true;
+      node.frustumCulled = false;
+      const g = node.geometry;
+      if (g && !ranges.has(g)) {
+        ranges.set(g, { ...g.drawRange });
+        g.setDrawRange(0, 0);
+      }
+    });
+    try {
+      renderer.render(scene, camera);
+    } finally {
+      for (const [node, visible, culled] of objects) {
+        node.visible = visible;
+        node.frustumCulled = culled;
+      }
+      for (const [g, range] of ranges) g.setDrawRange(range.start, range.count);
+    }
+    for (const [mode, cameraMode] of [
+      ["flying", 1],
+      ["preview", 0],
+    ])
+      draw({ mode, cameraMode, t: 0, dt: 0, snap: true });
+  }
+  return { generate, draw, warmup };
 }

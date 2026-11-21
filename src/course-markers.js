@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 
 // The ring shares its centre and clear radius with the swept gate test. Two
 // legs attach it to this particular slope, including on a cross-sloping shelf.
@@ -7,6 +8,12 @@ export function createCourseMarkers(scene) {
   scene.add(group);
   const hoopGeometry = new THREE.TorusGeometry(1, 0.028, 8, 80);
   const bandGeometry = new THREE.TorusGeometry(1, 0.031, 8, 4, 0.13);
+  const arcs = [-1, 1].flatMap((side) =>
+    [0.08, 0.34, 2.8, 3.06].map((angle) =>
+      bandGeometry.clone().rotateZ(side * angle),
+    ),
+  );
+  const stripesGeometry = mergeGeometries(arcs);
   const tube = new THREE.CylinderGeometry(1, 1, 1, 7);
   const flag = new THREE.BufferGeometry();
   flag.setAttribute(
@@ -60,14 +67,11 @@ export function createCourseMarkers(scene) {
           gate.y,
           0.1,
         );
-        for (const angle of [0.08, 0.34, 2.8, 3.06]) {
-          const stripe = new THREE.Mesh(bandGeometry, white);
-          stripe.scale.setScalar(gate.radius);
-          stripe.position.copy(hoop.position);
-          stripe.rotation.z = direction * angle;
-          station.add(stripe);
-        }
       }
+      const stripes = new THREE.Mesh(stripesGeometry, white);
+      stripes.scale.copy(hoop.scale);
+      stripes.position.copy(hoop.position);
+      station.add(stripes);
       group.add(station);
       gates.push({ station, hoop });
     }

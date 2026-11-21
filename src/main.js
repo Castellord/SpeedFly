@@ -119,14 +119,43 @@ function setMode(next) {
         : "За пилотом";
   if (next !== "flying") clearInputs();
 }
-function generated(newSeed, newNumber) {
+const nextPaint = () =>
+  new Promise((resolve) =>
+    requestAnimationFrame(() => requestAnimationFrame(resolve)),
+  );
+
+function loadingStage(label, step) {
+  $("loadStage").textContent = label;
+  $("loadProgress").value = step;
+  $("loadStep").textContent = step + " / 4";
+}
+
+async function generated(newSeed, newNumber) {
+  setMode("loading");
+  $("loading").hidden = false;
+  $("retryLoad").hidden = true;
+  loadingStage("Построение рельефа", 1);
+  await nextPaint();
   seed = newSeed;
   number = newNumber;
   title =
     seed === firstSeed
       ? lineNames[0]
       : lineNames[1 + (seed % (lineNames.length - 1))];
-  ({ world, flight } = scene.generate(seed));
+  const line = scene.generate(seed);
+  ({ world, flight } = line);
+  loadingStage("Загрузка моделей и текстур", 2);
+  await Promise.all([
+    line.ready,
+    document.fonts.load("600 16px Oswald"),
+    document.fonts.load("500 16px Manrope"),
+    document.fonts.load("italic 800 16px Barlow"),
+  ]);
+  loadingStage("Подготовка графики", 3);
+  await nextPaint();
+  await scene.warmup();
+  loadingStage("Подготовка приборов", 4);
+  await nextPaint();
   drawMap = createMap($("map"), world, flight.gates);
   const g = flight.gates;
   let dist = 0,
@@ -176,7 +205,7 @@ $("flightStyle").onchange = (e) => {
   }
 };
 function launch() {
-  if (!flight || regenerating) return;
+  if (!flight || regenerating || mode === "loading") return;
   if (panel.open) closePanel(false);
   configureStart();
   saved = false;
@@ -194,15 +223,10 @@ async function newLine() {
   regenerating = true;
   try {
     if (panel.open) closePanel(false);
-    $("loading").hidden = false;
-    setMode("loading");
-    await new Promise((resolve) =>
-      requestAnimationFrame(() => requestAnimationFrame(resolve)),
-    );
     let next = crypto.getRandomValues(new Uint32Array(1))[0];
     if (next % (lineNames.length - 1) === seed % (lineNames.length - 1))
       next = (next + 1) >>> 0;
-    generated(next, number + 1);
+    await generated(next, number + 1);
   } catch (error) {
     showError(error);
   } finally {
@@ -547,8 +571,12 @@ $("touchTrimUp").onclick = () => trimBy(0.1);
 function showError(err) {
   console.error(err);
   $("loading").hidden = false;
-  $("loading").textContent =
-    "Не удалось открыть 3D-сцену. Включи WebGL 2 и аппаратное ускорение в браузере и обнови страницу.";
+  $("loadStage").textContent = scene
+    ? "Не удалось подготовить линию. Проверь соединение и попробуй ещё раз."
+    : "Для полёта требуется WebGL 2. Проверь аппаратное ускорение браузера.";
+  $("loadStep").textContent = "";
+  $("loadProgress").hidden = true;
+  $("retryLoad").hidden = false;
   $("brief").hidden = true;
 }
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -565,7 +593,7 @@ function frame(now) {
   }
   const dt = rafTime ? Math.max(0, (now - rafTime) / 1000) : 0;
   rafTime = now;
-  if (flight && !document.hidden) {
+  if (flight && mode !== "loading" && !document.hidden) {
     if (mode === "flying") {
       const s = flight.state,
         old = s.nextGate,
@@ -616,10 +644,11 @@ function frame(now) {
   }
   requestAnimationFrame(frame);
 }
-requestAnimationFrame(() => {
+$("retryLoad").onclick = () => location.reload();
+requestAnimationFrame(async () => {
   try {
     scene = createScene($("scene"));
-    generated(firstSeed, 1);
+    await generated(firstSeed, 1);
     requestAnimationFrame(frame);
   } catch (err) {
     showError(err);
