@@ -1,11 +1,23 @@
 // Point-mass flight under a banked lifting wing. Distances are metres, angles radians.
 const G = 9.81;
 const TAU = 2 * Math.PI;
+const canopySection = [
+  [-4.2, 3.3],
+  [0, 5.2],
+  [4.2, 3.3],
+];
 const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
 const unit = (value) => clamp(Number.isFinite(value) ? value : 0, 0, 1);
 const approach = (current, target, rate, dt) =>
   current + (target - current) * -Math.expm1(-rate * dt);
 const principalAngle = (angle) => Math.atan2(Math.sin(angle), Math.cos(angle));
+
+const proximityHeight = 15;
+function fractionNearGround(start, end) {
+  if (start <= proximityHeight && end <= proximityHeight) return 1;
+  if (start >= proximityHeight && end >= proximityHeight) return 0;
+  return (proximityHeight - Math.min(start, end)) / Math.abs(end - start);
+}
 
 function randomSource(seed) {
   let value = 2166136261;
@@ -23,47 +35,42 @@ function makeCourse(world, seed) {
   const gates = [];
   const finish = 3200;
   const count = 12;
-  const startGround = world.height(world.center(0), 0);
-  const endGround = world.height(world.center(-finish), -finish);
   for (let i = 0; i < count; i++) {
     const t = i / (count - 1);
-    const distance =
-      200 +
-      t * (finish - 200) +
-      (i === 0 || i === count - 1 ? 0 : (random() - 0.5) * 48);
+    const scatter = i === 0 || i === count - 1 ? 0 : (random() - 0.5) * 52;
+    const distance = 125 + t * (finish - 125) + scatter;
     const z = -distance;
-    const x =
-      world.center(z) + Math.sin(phase + t * 8.5) * 22 + (random() - 0.5) * 12;
-    const ground = world.height(x, z);
-    const grade = startGround + ((endGround - startGround) * distance) / finish;
-    const y = Math.max(ground + 43, grade * 0.66 + ground * 0.34 + 65);
-    gates.push({ x, y, z, radius: i === count - 1 ? 42 : 33 });
+    const x = world.center(z) + 3.5 * Math.sin(phase + 9 * t);
+    const clearance = 9.5 + 1.3 * Math.sin(phase + t * 11);
+    const radius = i === 0 || i === count - 1 ? 8 : 6.8 + random() * 0.9;
+    gates.push({ x, y: world.height(x, z) + clearance, z, radius });
   }
   return gates;
 }
 
-const neutralSpeed = (trim) => 18 + 9 * trim;
-const neutralAngle = (trim) => -Math.atan(0.2 + 0.24 * trim);
+// Tuned generic wing polar. The equilibrium is set by L = W cos γ and D = -W sin γ.
+const neutralSpeed = (trim) => 17.5 + 10.5 * trim;
+const glideSlope = (trim) => 0.19 + 0.42 * trim ** 1.16;
+const neutralAngle = (trim) => -Math.atan(glideSlope(trim));
 
 export function createFlight(world, seed = 1) {
   const gates = makeCourse(world, seed);
   const state = {};
-  let bankVelocity, rollTarget, rollDirection, rollCooldown;
+  let bankVelocity, lastUpright;
 
   function reset(style = "line") {
-    const trim = 0.5;
     const first = gates[0];
     const x = world.center(0);
     const ground = world.height(x, 0);
     const heading = Math.atan2(first.x - x, -first.z);
-    const y =
+    const y = ground + (style === "free" ? 350 : 11);
+    // An airborne start is already established on the first leg's glide angle.
+    // From here on the pilot alone determines height, speed and direction.
+    const initialSlope = (y - first.y) / Math.hypot(first.x - x, first.z);
+    const trim =
       style === "free"
-        ? ground + 350
-        : Math.max(
-            ground + 52,
-            first.y +
-              Math.hypot(first.x - x, first.z) * -Math.tan(neutralAngle(trim)),
-          );
+        ? 0.5
+        : unit((Math.max(0, initialSlope - 0.19) / 0.42) ** (1 / 1.16));
     const pitch = neutralAngle(trim);
     const speed = neutralSpeed(trim);
     Object.assign(state, {
@@ -72,13 +79,18 @@ export function createFlight(world, seed = 1) {
       z: 0,
       heading,
       bank: 0,
+      bankRate: 0,
+      canopyBank: 0,
       pitch,
+      pitchRate: 0,
+      canopyPitch: pitch + 0.15 - 0.08 * trim,
       speed,
       climb: speed * Math.sin(pitch),
       agl: y - ground,
       style,
       impact: null,
       distance: 0,
+      proximityDistance: 0,
       time: 0,
       nextGate: 0,
       passed: 0,
@@ -90,51 +102,51 @@ export function createFlight(world, seed = 1) {
       rolls: 0,
     });
     bankVelocity = 0;
-    rollTarget = 0;
-    rollDirection = 0;
-    rollCooldown = 0;
+    lastUpright = 0;
     return state;
   }
 
-  function updateBank(dt, demand) {
-    const bank = principalAngle(state.bank);
-    rollCooldown = Math.max(0, rollCooldown - dt);
-    if (
-      !rollDirection &&
-      rollCooldown === 0 &&
-      demand * bank < -0.52 &&
-      Math.abs(demand) > 0.84 &&
-      state.speed > 18.5
-    ) {
-      // A strong reversal unloads the first turn and supplies angular momentum through the opposite side.
-      rollDirection = Math.sign(demand);
-      rollTarget = Math.round(state.bank / TAU) * TAU + rollDirection * TAU;
-    }
-    if (rollDirection) {
-      const remaining = (rollTarget - state.bank) * rollDirection;
-      const targetRate = clamp(
-        remaining * 2.8 + 0.65,
-        0.65,
-        3.0 + 0.025 * (state.speed - 18),
-      );
-      bankVelocity = approach(
-        bankVelocity,
-        rollDirection * targetRate,
-        4.8,
-        dt,
-      );
-      state.bank += bankVelocity * dt;
-      if ((rollTarget - state.bank) * rollDirection <= 0) {
-        rollDirection = 0;
-        rollCooldown = 0.65;
-        state.rolls++;
-      }
-      return;
-    }
-    const target =
-      demand * clamp(1.08 + (state.speed - 15) * 0.013, 0.92, 1.36);
-    bankVelocity += ((target - bank) * 8.8 - 4.4 * bankVelocity) * dt;
+  function updateBank(dt, differential, commonBrake) {
+    // A suspended pilot and the canopy behave like a driven, damped pendulum.
+    // Gravity changes sign beyond vertical. A reversal can use existing angular
+    // momentum to clear the top; releasing or countering the brake changes the outcome.
+    const authority =
+      0.72 + 0.13 * clamp((state.speed - 13) / 12, 0, 1.15) + 0.04 * state.trim;
+    const restoring = 5.8;
+    const damping =
+      0.91 +
+      0.075 * Math.abs(bankVelocity) +
+      0.95 * (1 - Math.abs(differential)) ** 2 +
+      0.58 * commonBrake;
+    const torque =
+      restoring * (authority * differential - Math.sin(state.bank));
+    bankVelocity += (torque - damping * bankVelocity) * dt;
     state.bank += bankVelocity * dt;
+    const rotation = state.bank - lastUpright;
+    if (Math.abs(rotation) >= TAU - 0.12) {
+      lastUpright += Math.sign(rotation) * TAU;
+      state.rolls++;
+    }
+  }
+
+  function canopyImpact() {
+    const rollSin = Math.sin(state.canopyBank),
+      rollCos = Math.cos(state.canopyBank);
+    const pitchSin = Math.sin(state.canopyPitch),
+      pitchCos = Math.cos(state.canopyPitch);
+    const headingSin = Math.sin(state.heading),
+      headingCos = Math.cos(state.heading);
+    for (const [span, height] of canopySection) {
+      const lateral = span * rollCos + height * rollSin;
+      const vertical = height * rollCos - span * rollSin;
+      const aft = vertical * pitchSin;
+      const x = state.x + lateral * headingCos - aft * headingSin;
+      const y = state.y + vertical * pitchCos;
+      const z = state.z + lateral * headingSin + aft * headingCos;
+      if (y <= world.height(x, z)) return "terrain";
+      if (world.hitsObstacle?.(x, y, z)) return "obstacle";
+    }
+    return null;
   }
 
   function integrate(dt, input) {
@@ -146,39 +158,41 @@ export function createFlight(world, seed = 1) {
     state.left = approach(state.left, left, 6.5, dt);
     state.right = approach(state.right, right, 6.5, dt);
     state.trim = approach(state.trim, unit(input.trim ?? state.trim), 2.6, dt);
-    // Detect the brisk reversal at the handles; use loaded lines for the normal bank response.
-    const reversal =
-      Math.abs(right - left) > 0.84 &&
-      (right - left) * principalAngle(state.bank) < -0.52;
-    updateBank(dt, reversal ? right - left : state.right - state.left);
-
     const symmetric = Math.min(state.left, state.right);
-    const differential = Math.abs(state.left - state.right);
-    const brake = symmetric + 0.23 * differential;
+    const differential = state.right - state.left;
+    updateBank(dt, differential, symmetric);
+
     const referenceAngle = neutralAngle(state.trim);
-    const dynamicPressure = (state.speed / neutralSpeed(state.trim)) ** 2;
-    const stall =
-      clamp((symmetric - 0.73) / 0.27, 0, 1) *
-      clamp((18 - state.speed) / 6, 0, 1);
-    const wingLift =
-      G *
-      Math.cos(referenceAngle) *
-      dynamicPressure *
-      (1 + 0.66 * brake - 0.93 * stall);
+    const speedRatio = state.speed / neutralSpeed(state.trim);
+    const pressure = speedRatio ** 2;
+    const brake = symmetric + 0.18 * Math.abs(differential);
+    // Deep, sustained brake loses lift only once the wing has shed airspeed.
+    const separation =
+      unit((symmetric - 0.68) / 0.32) * unit((0.87 - speedRatio) / 0.21);
+    const liftCoefficient = 1 + 1.04 * brake - 1.08 * separation;
+    const wingLift = G * Math.cos(referenceAngle) * pressure * liftCoefficient;
     const drag =
       G *
-      -Math.sin(referenceAngle) *
-      dynamicPressure *
-      (1 + 1.25 * brake + 0.53 * symmetric ** 4 + 0.2 * differential);
-    const bankCos = Math.cos(state.bank);
+      pressure *
+      (-Math.sin(referenceAngle) * (1 + 0.8 * brake) +
+        0.094 * symmetric ** 2 +
+        0.038 * Math.abs(differential) +
+        0.14 * separation);
     const speedRate = -G * Math.sin(state.pitch) - drag;
-    const verticalLift = wingLift * bankCos;
-    // Damping models the underslung pilot settling after a surge or a flare.
+    const verticalLift = wingLift * Math.cos(state.bank);
+    // Pitch damping represents the canopy–pilot recovery arc. Lift redirects
+    // velocity and drag dissipates it; a flare never adds kinetic energy.
     const pitchRate =
       (verticalLift - G * Math.cos(state.pitch)) / state.speed -
-      0.6 * (state.pitch - referenceAngle);
-    state.pitch = clamp(state.pitch + pitchRate * dt, -1.3, 0.56);
-    state.speed = clamp(state.speed + speedRate * dt, 6.5, 53);
+      (0.27 - 0.09 * state.trim) * (state.pitch - referenceAngle);
+    state.pitch = clamp(state.pitch + pitchRate * dt, -1.39, 0.76);
+    state.speed = clamp(state.speed + speedRate * dt, 6.5, 55);
+    state.bankRate = bankVelocity;
+    state.pitchRate = pitchRate;
+    // The loaded canopy leads the pendular harness slightly in roll. Chord
+    // attitude includes incidence, while pitch above is the velocity angle.
+    state.canopyBank = state.bank + clamp(0.095 * bankVelocity, -0.25, 0.25);
+    state.canopyPitch = state.pitch + 0.15 - 0.08 * state.trim + 0.14 * brake;
     const horizontalSpeed = state.speed * Math.cos(state.pitch);
     state.heading +=
       ((wingLift * Math.sin(state.bank)) / Math.max(7, horizontalSpeed)) * dt;
@@ -186,10 +200,14 @@ export function createFlight(world, seed = 1) {
     state.x += Math.sin(state.heading) * horizontalSpeed * dt;
     state.z -= Math.cos(state.heading) * horizontalSpeed * dt;
     state.y += state.climb * dt;
-    state.distance += horizontalSpeed * dt;
+    const horizontalDistance = horizontalSpeed * dt;
+    state.distance += horizontalDistance;
     state.time += dt;
     const ground = world.height(state.x, state.z);
+    const previousAgl = state.agl;
     state.agl = state.y - ground;
+    state.proximityDistance +=
+      horizontalDistance * fractionNearGround(previousAgl, state.agl);
 
     const gate = state.style === "line" && gates[state.nextGate];
     if (gate && z0 >= gate.z && state.z <= gate.z && state.z < z0) {
@@ -200,9 +218,14 @@ export function createFlight(world, seed = 1) {
       else state.missed++;
       state.nextGate++;
     }
-    if (world.hitsObstacle?.(state.x, state.y, state.z)) {
+    // The fabric, particularly a low wingtip in a carving turn, may strike
+    // before the pilot's harness. Sample the short span on each physics step.
+    const impact = world.hitsObstacle?.(state.x, state.y, state.z)
+      ? "obstacle"
+      : canopyImpact();
+    if (impact) {
       state.status = "crashed";
-      state.impact = "obstacle";
+      state.impact = impact;
     } else if (state.agl <= 0.65) {
       const approachRate =
         (ground - world.height(x0, z0) - (state.y - y0)) / dt;

@@ -76,7 +76,7 @@
           <span class="bars"></span><span id="lineNo">ЛИНИЯ 001</span><em></em
           ><label class="line-mode"
             ><select id="flightStyle" aria-label="Режим полёта">
-              <option value="line">Полёт по воротам</option>
+              <option value="line">Проксимити-линия</option>
               <option value="free">Свободный полёт</option>
             </select></label
           >
@@ -103,6 +103,9 @@
         ><strong id="goal">—</strong>
         <div>
           <span id="clock">00:00</span> <span id="passed">0 пройдено</span>
+        </div>
+        <div class="proximity-readout">
+          Ниже 15 м <b id="lowDistance">0 м</b>
         </div>
       </div>
       <div class="flight-buttons" hidden>

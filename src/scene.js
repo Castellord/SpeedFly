@@ -1,6 +1,9 @@
 import * as THREE from "three";
 import { createWorld } from "./world.js";
 import { createWing, createCockpit } from "./wing.js";
+import { createScannedRocks } from "./scanned-rocks.js";
+import { createCourseMarkers } from "./course-markers.js";
+import { createWingShadow } from "./wing-shadow.js";
 import { createFlight } from "./flight.js";
 
 export function createScene(canvas) {
@@ -33,16 +36,11 @@ export function createScene(canvas) {
   const cockpit = createCockpit();
   camera.add(cockpit.group);
   scene.add(camera);
-  const rings = new THREE.Group();
-  scene.add(rings);
-  const circle = new THREE.TorusGeometry(1, 0.017, 6, 80);
-  const ringMat = new THREE.MeshBasicMaterial({ color: 0xff7736 }),
-    aheadMat = new THREE.MeshBasicMaterial({
-      color: 0xffa56f,
-      transparent: true,
-      opacity: 0.63,
-    });
-  let world,
+  const courseMarkers = createCourseMarkers(scene);
+  const updateShadow = createWingShadow(scene, sun.position);
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  let scannedRocks,
+    world,
     flight,
     ratio = 1,
     framerate = 0,
@@ -56,17 +54,17 @@ export function createScene(canvas) {
     right = new THREE.Vector3(),
     origin = new THREE.Vector3();
   function generate(seed) {
+    scannedRocks?.dispose();
     if (world) world.dispose();
-    rings.clear();
     world = createWorld(scene, seed);
+    const rocks = createScannedRocks(scene, world, seed);
+    scannedRocks = rocks;
+    const terrainObstacles = world.hitsObstacle;
+    world.hitsObstacle = (x, y, z) =>
+      terrainObstacles(x, y, z) || rocks.hits(x, y, z);
     flight = createFlight(world, seed);
-    flight.gates.forEach((g) => {
-      const ring = new THREE.Mesh(circle, ringMat);
-      ring.position.set(g.x, g.y, g.z);
-      ring.scale.setScalar(g.radius);
-      rings.add(ring);
-    });
-    return { world, flight };
+    courseMarkers.generate(world, flight.gates);
+    return { world, flight, ready: rocks.ready };
   }
   function draw({ mode, cameraMode, t, dt, snap }) {
     const s = flight.state,
@@ -98,22 +96,35 @@ export function createScene(canvas) {
     wing.group.position.copy(origin);
     wing.group.rotation.order = "YXZ";
     wing.group.rotation.y = -dir;
-    wing.group.rotation.x = preview ? -0.015 : s.pitch * 0.56;
+    wing.group.rotation.x = preview
+      ? -0.015
+      : (s.canopyPitch ?? s.pitch * 0.56);
     wing.group.rotation.z = -bank;
-    wing.update(s.left, s.right, s.trim, t, bank);
+    wing.update(
+      s.left,
+      s.right,
+      s.trim,
+      t,
+      bank,
+      preview ? 0 : (s.canopyBank ?? bank) - bank,
+    );
     wing.group.visible = cameraMode !== 1 || preview;
     cockpit.group.visible = !wing.group.visible;
-    if (cockpit.group.visible)
-      cockpit.update(s.left, s.right, s.trim, t, camera.aspect);
-    for (let i = 0; i < rings.children.length; i++) {
-      const obj = rings.children[i];
-      obj.visible =
-        s.style === "line" &&
-        !preview &&
-        i >= s.nextGate &&
-        i <= s.nextGate + 2;
-      obj.material = i === s.nextGate ? ringMat : aheadMat;
+    const speedFraction = THREE.MathUtils.smoothstep(s.speed, 14, 36);
+    const targetFov = preview ? 55 : cameraMode === 1 ? 77 : 65;
+    const widen =
+      preview || reducedMotion.matches ? 0 : 8 * (speedFraction - 0.4);
+    const fov = snap
+      ? targetFov + widen
+      : THREE.MathUtils.damp(camera.fov, targetFov + widen, 3.5, dt);
+    if (Math.abs(fov - camera.fov) > 0.015) {
+      camera.fov = fov;
+      camera.updateProjectionMatrix();
     }
+    if (cockpit.group.visible)
+      cockpit.update(s.left, s.right, s.trim, t, camera.aspect, camera.fov);
+    courseMarkers.update(s, preview);
+    updateShadow(world, s, wing.canopy);
     if (preview) {
       const portrait = w / h < 1.1;
       const sway = Math.sin(t * 0.095) * 0.6;
@@ -130,22 +141,44 @@ export function createScene(canvas) {
     } else if (cameraMode === 1) {
       eye.copy(origin).addScaledVector(forward, 0.28);
       eye.y += 0.67;
+      // Eyes look forward through the turn. Flight-path angle determines how
+      // much of the approaching surface is visible on a diving entry.
       target.copy(eye).addScaledVector(forward, 25);
-      target.y += Math.sin(s.pitch) * 12;
+      target.y +=
+        25 *
+        Math.tan(THREE.MathUtils.clamp(s.pitch * 0.87 - 0.055, -1.02, 0.38));
+      target.addScaledVector(
+        right,
+        reducedMotion.matches
+          ? 0
+          : THREE.MathUtils.clamp((s.bankRate ?? 0) * 0.38, -0.9, 0.9),
+      );
     } else {
-      eye.copy(origin).addScaledVector(forward, -14.0);
-      eye.y += 7.1;
+      eye.copy(origin).addScaledVector(forward, -10.5);
+      eye.y += 3.8;
       eye.y = Math.max(eye.y, world.height(eye.x, eye.z) + 1.8);
       target.copy(origin).addScaledVector(forward, 11);
-      target.y += 2.3 + s.climb * 0.12;
+      target.y += 1.6 + s.climb * 0.22;
     }
-    const f = preview || cameraMode === 1 || snap ? 1 : 1 - Math.exp(-6 * dt);
+    const f = preview || cameraMode === 1 || snap ? 1 : 1 - Math.exp(-10 * dt);
     camera.position.lerp(eye, f);
+    if (!preview && cameraMode === 0)
+      camera.position.y = Math.max(
+        camera.position.y,
+        world.height(camera.position.x, camera.position.z) + 0.85,
+      );
     horizontal.copy(right);
     const tilt = preview ? 0 : cameraMode === 1 ? bank : Math.sin(bank) * 0.14;
     up.set(0, Math.cos(tilt), 0).addScaledVector(horizontal, Math.sin(tilt));
     camera.up.copy(up);
     camera.lookAt(target);
+    camera.getWorldDirection(horizontal);
+    world.update?.(
+      camera.position.x,
+      camera.position.z,
+      Math.atan2(horizontal.x, -horizontal.z),
+    );
+    scannedRocks.update(camera.position.x, camera.position.z);
     renderer.render(scene, camera);
   }
   return { generate, draw };

@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { createVegetation } from "./vegetation.js";
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const fade = (t) => t * t * (3 - 2 * t);
@@ -125,16 +126,23 @@ function landMaterial() {
         cliffPhoto: { value: null },
         haveMeadow: { value: 0 },
         haveCliff: { value: 0 },
+        snowline: { value: 1990 },
       },
     ]),
     vertexShader: `
       #include <fog_pars_vertex>
       attribute vec4 habitat;
+      attribute float bedrock;
+      attribute vec2 torrent;
+      varying vec2 creek;
+      varying float exposureRock;
       varying vec3 pos;
       varying vec3 slope;
       varying vec4 env;
       void main() {
         env = habitat;
+        exposureRock = bedrock;
+        creek = torrent;
         pos = position;
         slope = normal;
         vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
@@ -148,6 +156,9 @@ function landMaterial() {
       uniform sampler2D cliffPhoto;
       uniform float haveMeadow;
       uniform float haveCliff;
+      uniform float snowline;
+      varying vec2 creek;
+      varying float exposureRock;
       uniform vec3 sun;
       uniform float time;
       varying vec3 pos;
@@ -172,6 +183,8 @@ function landMaterial() {
         float relief = env.x;
         float steep = 1. - max(n.y, 0.);
         float mineral = smoothstep(.12, .36, steep + mottling * .19 + relief * .00009);
+        mineral=max(mineral,smoothstep(.03,.88,exposureRock+(rock.r-.50)*.36));
+        float nearDetail=1.-smoothstep(25.,175.,length(cameraPosition-pos));
         float trees = env.y * smoothstep(-.12, .08, mottling + env.y * .13);
         vec3 meadow = mix(vec3(.49,.52,.30), vec3(.65,.62,.42), broad.g);
         meadow = mix(meadow, vec3(.255,.335,.245), trees * .77);
@@ -180,18 +193,20 @@ function landMaterial() {
         float fissure = smoothstep(.63, .94, rock.b) * smoothstep(.46, .78, rock.r);
         float seam = texture2D(atlas, vec2(pos.x * .33 + pos.z*.63, pos.y*2.1+pos.x*.27+pos.z*.43) / 47.).r;
         stone += (rock.g-.5) * .34 + fine*.19 - fissure*.155 + (seam-.5)*.13;
-        float reliefDetail = 0.;
         if(haveMeadow > .5 && mineral < .99) {
           mat2 twist = mat2(.83,.557,-.557,.83);
           vec3 small = texture2D(meadowPhoto,pos.xz/14.8 + broad.rg*.19).rgb;
           vec3 pasture = texture2D(meadowPhoto,twist*pos.xz/107. + broad.gb*.37).rgb;
           vec3 photo = mix(small,pasture,.47);
+          if(nearDetail>.001){
+            vec3 turf=texture2D(meadowPhoto,twist*pos.xz/1.8).rgb;
+            photo*=mix(vec3(1.),.60+turf*1.14,nearDetail*.72);
+          }
           float tone = dot(photo,luma);
           vec3 pigment = mix(vec3(.36,.39,.24),vec3(.68,.67,.46),clamp(tone*1.65,0.,1.));
           meadow = mix(meadow,pigment,.57) * (.40 + tone*1.45);
           meadow += (photo-vec3(tone))*.36 + mottling*.12;
           meadow *= 1.-trees*.22;
-          reliefDetail += (dot(small,luma)*.8 + dot(pasture,luma)*2.) * (1.-mineral);
         }
         vec3 cliffGrain = rock;
         if(haveCliff > .5 && mineral > .01) {
@@ -199,36 +214,51 @@ function landMaterial() {
           weights/=max(.001,weights.x+weights.y+weights.z);
           vec3 block = granite(pos*vec3(.89,1.16,.96)/143. + vec3(broad.rg,broad.b)*.31,weights);
           vec3 chip = granite(pos*vec3(1.,1.28,.82)/26. + vec3(broad.b,broad.r,broad.g)*.19,weights);
-          cliffGrain = mix(block,chip,.37);
+          cliffGrain = mix(block,chip,.45);
+          if(nearDetail>.001){
+            vec3 spall=granite(pos*vec3(1.,1.28,.82)/3.1,weights);
+            cliffGrain*=mix(vec3(1.),.57+spall*1.30,.78*nearDetail);
+          }
           float tone=dot(cliffGrain,luma);
           stone = mix(stone,vec3(.47,.485,.48)+mottling*.23,.48)*(.42+tone*1.47) + (cliffGrain-vec3(tone))*.52;
-          reliefDetail += (dot(block,luma)*12. + dot(chip,luma)*1.7)*mineral;
         }
+        // Bedding follows a dipping plane, cutting across the face of each cliff.
+        float beds=pos.y*.097+pos.x*.025+pos.z*.034+(broad.g-.5)*3.7+(rock.r-.5)*.88;
+        float join=1.-smoothstep(.05,.22,abs(fract(beds)-.5));
+        stone*=1.-join*.035*smoothstep(.05,.35,steep);
         vec3 surface = mix(meadow, stone, mineral);
         // Snow follows local shelter and the rock's fissures, leaving bands
         // of exposed strata even on the alpine faces beyond the course.
-        float exposure = pos.y - 1540. + relief*.30 - n.x * 181. - n.z * 94.;
+        float exposure = pos.y - snowline + relief*.30 - n.x * 181. - n.z * 94.;
         float snow = smoothstep(-24., 45., exposure - steep*1080. + mottling*620.
                         + (rock.r-.5)*165. + (dot(cliffGrain,luma)-.46)*210.);
         snow *= 1.-smoothstep(.19,.52,steep)*smoothstep(.04,.26,.45-rock.r)*.55;
         vec3 ice = mix(vec3(.74,.80,.82), vec3(.985,.98,.95), broad.g + fine*.21 + rock.g*.11);
         surface = mix(surface, ice, snow);
-        reliefDetail *= 1.-snow*.94;
         float width = 4.8 + 1.8*sin(pos.z*.0084) + 1.2*sin(pos.z*.019);
-        float channel = abs(env.z + (flake.r-.5)*1.5) / width;
-        float river = 1.-smoothstep(.78,1.06,channel);
-        float riparian = 1.-smoothstep(.85,3.5,channel);
-        surface = mix(surface, mix(vec3(.43,.44,.39),vec3(.66,.64,.54),flake.g), riparian*.84);
-        float ripple = texture2D(atlas, vec2(pos.x*.075, pos.z*.028+time*.038)).g;
-        vec3 water = mix(vec3(.28,.44,.46),vec3(.71,.78,.77),smoothstep(.43,.72,ripple));
-        surface = mix(surface,water,river);
-        // Surface-gradient bump from the same stone and turf albedos.
-        vec3 dpdx=dFdx(pos), dpdy=dFdy(pos);
-        vec3 tangentX=cross(dpdy,n), tangentY=cross(n,dpdx);
-        float det=dot(dpdx,tangentX);
-        vec3 grad=(dFdx(reliefDetail)*tangentX+dFdy(reliefDetail)*tangentY) * sign(det);
-        float nearBump=1.-smoothstep(160.,1400.,length(cameraPosition-pos));
-        n=normalize(n - clamp(grad/max(abs(det),.0001),vec3(-.44),vec3(.44))*(1.-river)*nearBump);
+        float mainChannel=abs(env.z +(flake.r-.5)*2.)/(width*max(.001,smoothstep(-5420.,-4350.,pos.z)));
+        float brookWidth=3.0+.83*sin(pos.z*.026)+1.25*(flake.g-.5);
+        float creekAxis=creek.x+(flake.g-.5)*2.+(rock.r-.5)*1.8;
+        float brook=abs(creekAxis)/(brookWidth*max(.001,creek.y));
+        float channel=min(mainChannel,brook);
+        float river=1.-smoothstep(.67,1.10,channel);
+        float riparian=1.-smoothstep(.80,3.52,channel);
+        vec3 bed=mix(vec3(.34,.35,.33),vec3(.60,.60,.54),flake.g);
+        if(haveCliff>.5 && riparian>.01) {
+          vec3 shingle=texture2D(cliffPhoto,pos.xz/4.55+rock.rg*.07).rgb;
+          bed=mix(bed,vec3(.19)+shingle*.71,.69);
+        }
+        surface=mix(surface,bed,riparian*.91);
+        vec3 eddy=texture2D(atlas,vec2(pos.x*.15+sin(pos.z*.24)*.15,pos.z*.058+time*.085)).rgb;
+        // Pale foam is local to the drops and shallow rocks. The bed remains
+        // visible through amber-grey water on the smoother shelves.
+        float boil=smoothstep(.09,.43,steep)+.23*smoothstep(.51,.78,flake.g);
+        float foam=smoothstep(.55,.74,eddy.g+.16*boil+fine*.32);
+        vec3 water=mix(bed*.74,vec3(.31,.415,.41),.43+.38*(1.-smoothstep(.14,.78,channel)));
+        water=mix(water,vec3(.75,.78,.74),foam*(.28+.61*clamp(boil,0.,1.)));
+        surface=mix(surface,water,river);
+        // Let the scans carry fine relief. Differentiating their pixel luminance
+        // turns tiny colour changes into sparkling, near-binary surface normals.
         float diffuse = max(dot(n,sun),0.);
         float light = .70 + diffuse*.39;
         vec3 lit = surface * light * mix(vec3(.84,.90,.99),vec3(1.055,1.02,.965),diffuse);
@@ -241,151 +271,369 @@ function landMaterial() {
   });
 }
 
-// Two original spruce silhouettes are projected from branching whorls. Three
-// intersecting cutout planes keep the crown airy at a distance as well as at
-// flight altitude. Mipmapping integrates the finer sprays into dense foliage.
-function spruceAtlas() {
-  if (typeof document === "undefined") return null;
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = 512;
-  const ctx = canvas.getContext("2d");
-  for (let variant = 0; variant < 2; variant++) {
-    const rng = randomSource(9437 + variant * 247);
-    const px = (x) => variant * 256 + 128 + x * 484,
-      py = (y) => 503 - y * 491;
-    const lean = (y) => 0.011 * Math.sin(y * 4.3 + variant) * y;
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(variant * 256, 0, 256, 512);
-    ctx.clip();
-    ctx.fillStyle = "#5a5243";
-    ctx.beginPath();
-    ctx.moveTo(px(-0.009), py(0));
-    ctx.lineTo(px(0.009), py(0));
-    ctx.lineTo(px(lean(1)), py(1));
-    ctx.fill();
-    const boughs = [];
-    for (let tier = 0; tier < 21; tier++) {
-      const y = 0.18 + tier * 0.0404;
-      const count = 4 + (tier % 3);
-      for (let j = 0; j < count; j++) {
-        const az = (j * 2 * Math.PI) / count + tier * 2.27 + rng() * 0.31;
-        const length = 0.229 * Math.pow(1 - y, 0.67) * (0.64 + rng() * 0.49);
-        boughs.push({ y, az, length, z: Math.sin(az) * length });
+// Exposed beds are closed, angular rock solids, with recessed joints, slanted
+// caps, fractured sides and projecting shelves. The collision lookup samples
+// their rendered triangles rather than approximating a cliff with a sphere.
+function crags({
+  world,
+  groundHeight,
+  center,
+  floor,
+  wallSide,
+  style,
+  rng,
+  material,
+  lightAt,
+  lips,
+}) {
+  const strips = new Map(),
+    cells = new Map(),
+    resources = [];
+  function face(batch, a, b, c) {
+    batch.positions.push(...a, ...b, ...c);
+    const denominator =
+      (b[0] - a[0]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[0] - a[0]);
+    if (Math.abs(denominator) < 0.012) return;
+    const hit = {
+      ax: a[0],
+      az: a[2],
+      ay: a[1],
+      bx: b[0] - a[0],
+      bz: b[2] - a[2],
+      by: b[1] - a[1],
+      cx: c[0] - a[0],
+      cz: c[2] - a[2],
+      cy: c[1] - a[1],
+      inv: 1 / denominator,
+    };
+    for (
+      let i = Math.floor(Math.min(a[0], b[0], c[0]) / 32);
+      i <= Math.floor(Math.max(a[0], b[0], c[0]) / 32);
+      i++
+    ) {
+      for (
+        let j = Math.floor(Math.min(a[2], b[2], c[2]) / 32);
+        j <= Math.floor(Math.max(a[2], b[2], c[2]) / 32);
+        j++
+      ) {
+        const key = i + "," + j;
+        if (!cells.has(key)) cells.set(key, []);
+        cells.get(key).push(hit);
       }
     }
-    boughs.sort((a, b) => a.z - b.z);
-    for (const { y, az, length } of boughs) {
-      const dx = Math.cos(az),
-        dz = Math.sin(az),
-        root = lean(y);
-      const day = 0.4 + 0.35 * Math.max(0, -dx) + 0.21 * Math.max(0, dz);
-      const ink = (bright, warm) =>
-        "rgb(" +
-        Math.round(34 + bright * 42 + warm * 5) +
-        "," +
-        Math.round(50 + bright * 43 + warm * 3) +
-        "," +
-        Math.round(42 + bright * 33) +
-        ")";
-      function xy(t) {
-        return [
-          root + dx * length * t,
-          y - length * (0.38 * Math.sin(t * 2.4) + t * 0.018),
-        ];
-      }
-      const tip = xy(1);
-      ctx.strokeStyle = ink(0.18 + day * 0.47, 0);
-      ctx.lineWidth = 1.1 + length * 8;
-      ctx.beginPath();
-      ctx.moveTo(px(root), py(y));
-      ctx.quadraticCurveTo(
-        px(root + dx * length * 0.52),
-        py(y - length * 0.32),
-        px(tip[0]),
-        py(tip[1]),
-      );
-      ctx.stroke();
-      for (let j = 1; j <= 18; j++) {
-        const u = j / 19,
-          [x, h] = xy(u);
-        for (const side of [-1, 1]) {
-          const spread = length * (0.42 - 0.28 * u) * (0.68 + rng() * 0.47);
-          const lateral = -dz * side * spread,
-            forward = dx * spread * 0.85;
-          const ex = x + lateral + forward,
-            eh = h - spread * (0.5 + rng() * 0.63);
-          ctx.fillStyle = ink(
-            day * (0.57 + 0.3 * u) + rng() * 0.16,
-            dx < 0 ? 1 : 0,
-          );
-          ctx.beginPath();
-          ctx.moveTo(px(x), py(h + 0.003));
-          ctx.lineTo(
-            px(x + lateral * 0.74 + forward * 0.34),
-            py(h - spread * 0.18),
-          );
-          ctx.lineTo(px(ex), py(eh));
-          ctx.lineTo(px(x + forward * 0.54), py(h - spread * 0.29));
-          ctx.closePath();
-          ctx.fill();
-          ctx.lineWidth = 0.72;
-          for (let k = 1; k < 5; k++) {
-            const f = k * 0.18,
-              nx = x + (ex - x) * f,
-              nh = mix(h, eh, f);
-            ctx.strokeStyle = ink(
-              day * (0.71 + 0.31 * u) + rng() * 0.27,
-              dx < 0 ? 1 : 0,
-            );
-            ctx.beginPath();
-            ctx.moveTo(px(nx), py(nh));
-            ctx.lineTo(
-              px(nx + (dx * 0.13 - side * dz * 0.16) * spread),
-              py(nh - spread * (0.21 + rng() * 0.21)),
-            );
-            ctx.stroke();
-          }
+  }
+  function rock(z, d, h, width, length, strike, minOffset = 21.5) {
+    const side = Math.sign(d),
+      x = center(z) + d;
+    const ground = groundHeight(x, z);
+    // A jointed block has a dominant plane and several broken corners.
+    // The ledge retreats on just its exposed edge, never around the full rim.
+    const outline = [
+      [-0.97, -0.56],
+      [-0.49, -1],
+      [0.62, -0.85],
+      [1, -0.29],
+      [0.73, 0.65],
+      [0.25, 1],
+      [-0.74, 0.77],
+      [-1, 0.12],
+    ];
+    const n = outline.length,
+      lean = (rng() - 0.5) * 0.52,
+      along = (rng() - 0.5) * 0.58;
+    const brokenSide = rng() * Math.PI * 2;
+    const contour = outline.map(([u, v], i) => {
+      const mod = 0.79 + rng() * 0.36,
+        sideFracture = Math.max(
+          0,
+          Math.cos((i * Math.PI * 2) / n - brokenSide),
+        );
+      return {
+        u: u * width * mod + 0.12 * v * width,
+        v: v * length * mod,
+        crown: 0.7 + lean * u + along * v + 0.14 * rng() - 0.18 * sideFracture,
+        breakAt: 0.26 + rng() * 0.29 + sideFracture * 0.22,
+        projection: sideFracture * (0.08 + rng() * 0.24),
+        weather: rng() * 0.08,
+      };
+    });
+    const qSlope = (floor(z + 18) - floor(z - 18)) / 36,
+      dip = (rng() - 0.5) * 0.25;
+    const slip = (rng() - 0.5) * 0.48,
+      shift = (rng() - 0.5) * 0.31,
+      cleft = rng() < 0.43;
+    function ring(position) {
+      return contour.map(({ u, v, crown, breakAt, projection, weather }) => {
+        let scale = 1,
+          t = -0.5;
+        if (position === "knee") {
+          scale = 1.0 + projection - weather;
+          t = breakAt;
         }
-      }
+        if (position === "notch") {
+          scale = 1.0 + projection * (cleft ? -0.31 : 0.65) - weather;
+          t = breakAt + 0.05;
+        }
+        if (position === "shoulder") {
+          scale = 0.85 + projection * 0.21 - weather;
+          t = 0.8 + weather;
+        }
+        if (position === "cap") {
+          scale = 0.65 + projection * 0.3 + weather;
+          t = 1;
+        }
+        const dz = v * scale + length * t * shift,
+          pz = z + dz;
+        const du = u * scale + dz * strike + width * t * slip;
+        const px =
+          center(pz) + side * Math.max(minOffset, Math.abs(d) + side * du);
+        const py = ground + qSlope * dz + dip * u + h * t * crown;
+        return [px, py, pz];
+      });
     }
-    ctx.restore();
+    const key = Math.floor(z / 430);
+    if (!strips.has(key)) strips.set(key, { positions: [] });
+    const batch = strips.get(key);
+    let previous = ring("base");
+    // Embed every corner, including rocks spanning a pre-existing drop.
+    for (const point of previous)
+      point[1] = Math.min(point[1], groundHeight(point[0], point[2]) - 1.2);
+    function join(next) {
+      for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n;
+        face(batch, previous[i], next[i], previous[j]);
+        face(batch, previous[j], next[i], next[j]);
+      }
+      previous = next;
+    }
+    join(ring("knee"));
+    if (cleft) join(ring("notch"));
+    join(ring("shoulder"));
+    join(ring("cap"));
+    const top = [
+      previous.reduce((a, p) => a + p[0], 0) / n,
+      previous.reduce((a, p) => a + p[1], 0) / n + h * 0.053,
+      previous.reduce((a, p) => a + p[2], 0) / n,
+    ];
+    for (let i = 0; i < n; i++)
+      face(batch, previous[i], top, previous[(i + 1) % n]);
   }
-  const map = new THREE.CanvasTexture(canvas);
-  map.colorSpace = THREE.SRGBColorSpace;
-  map.anisotropy = 4;
-  return map;
-}
-
-function makeSpruce() {
-  const positions = [],
-    uvs = [],
-    indices = [];
-  for (let i = 0; i < 3; i++) {
-    const angle = (i * Math.PI) / 3;
-    const dx = Math.cos(angle) * 0.267,
-      dz = Math.sin(angle) * 0.267;
-    const first = i * 4,
-      left = (i % 2) * 0.5;
-    positions.push(-dx, 0, -dz, dx, 0, dz, dx, 1.045, dz, -dx, 1.045, -dz);
-    uvs.push(left, 0, left + 0.5, 0, left + 0.5, 1, left, 1);
-    indices.push(first, first + 1, first + 2, first, first + 2, first + 3);
+  // Two distinct landmarks frame the first turn. All subsequent scarps
+  // follow seeded reaches, from a single tor to a run of offset strata.
+  rock(-54, wallSide * 47, 16 + 5 * rng(), 13, 29, 0.11);
+  rock(-97, -wallSide * 30, 6 + 4 * rng(), 7, 10, -0.19);
+  rock(-142, wallSide * 50, 13, 17, 28, 0.09);
+  for (let z = 180; z > -3800; z -= 105 + rng() * 133) {
+    const s = rng() < 0.73 ? wallSide : -wallSide;
+    const shelf = style === 2 ? 39 + rng() * 52 : 34 + rng() * 47;
+    const count = 2 + Math.floor(rng() * 4);
+    for (let i = 0; i < count; i++) {
+      const tooth = 0.65 + rng() * 0.64;
+      rock(
+        z - i * (10 + rng() * 18),
+        s * (shelf + rng() * 20),
+        tooth * (8 + rng() * 18),
+        7 + rng() * 15,
+        14 + rng() * 29,
+        (rng() - 0.5) * 0.62,
+      );
+    }
+    if (rng() < 0.65)
+      rock(
+        z - 78,
+        -s * (29 + rng() * 25),
+        5 + rng() * 12,
+        6 + rng() * 8,
+        9 + rng() * 19,
+        (rng() - 0.5) * 0.55,
+      );
   }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-  g.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
-  g.setIndex(indices);
-  return g;
-}
-
-function gridAxis(lo, hi, closeLo, closeHi) {
-  const axis = [];
+  for (const lip of lips) {
+    // Massive fractured slabs bracket the gap through each drop.
+    for (let i = 0; i < 6; i++) {
+      const s = i % 2 === 0 ? wallSide : -wallSide;
+      rock(
+        -lip.distance + 36 - i * 13,
+        s * (28 + rng() * 11),
+        3.6 + rng() * 9,
+        6 + rng() * 8,
+        13 + rng() * 16,
+        (rng() - 0.5) * 0.48,
+      );
+    }
+  }
+  // The tributary skirts a train of plucked, slanting slabs. Their low
+  // upstream ends are embedded in the stream bed; the central flight path
+  // and the space swept by a banking canopy stay open.
   for (
-    let v = lo;
-    v < hi;
-    v += 13 + Math.min(125, Math.max(closeLo - v, v - closeHi, 0) * 0.02)
-  )
-    axis.push(v);
+    let z = -(lips[0].distance - 130);
+    z > -(lips[0].distance + 365);
+    z -= 33 + rng() * 34
+  ) {
+    const side = rng() < 0.58 ? wallSide : -wallSide;
+    const d = side * (14.8 + rng() * 8);
+    rock(
+      z,
+      d,
+      1.6 + rng() * 2.5,
+      3.0 + rng() * 4.2,
+      4.3 + rng() * 8,
+      (rng() - 0.5) * 0.89,
+      10.9,
+    );
+    if (rng() < 0.6)
+      rock(
+        z - 8,
+        d + side * 3,
+        1.2 + rng() * 1.9,
+        2.4 + rng() * 3,
+        4 + rng() * 5,
+        0.31,
+        10.8,
+      );
+  }
+  // Larger, more widely spaced ribs break up the high valley walls.
+  for (let z = 580; z > -4750; z -= 172 + rng() * 169) {
+    const side = rng() < 0.5 ? -1 : 1;
+    for (let j = 0; j < 3; j++)
+      rock(
+        z - j * 29,
+        side * (168 + rng() * 126),
+        28 + rng() * 50,
+        21 + rng() * 32,
+        23 + rng() * 48,
+        (rng() - 0.5) * 0.83,
+      );
+  }
+  for (const { positions } of strips.values()) {
+    const g = new THREE.BufferGeometry(),
+      habitat = [],
+      cover = [];
+    for (let i = 0; i < positions.length; i += 3) {
+      const [x, y, z] = [positions[i], positions[i + 1], positions[i + 2]];
+      habitat.push(y - floor(z), 0, 1000, lightAt(x, z));
+      cover.push(1);
+    }
+    g.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    g.setAttribute("habitat", new THREE.Float32BufferAttribute(habitat, 4));
+    g.setAttribute("bedrock", new THREE.Float32BufferAttribute(cover, 1));
+    const dry = new Float32Array(cover.length * 2);
+    for (let i = 0; i < cover.length; i++) dry[i * 2] = 1000;
+    g.setAttribute("torrent", new THREE.BufferAttribute(dry, 2));
+    g.computeVertexNormals();
+    g.computeBoundingSphere();
+    const mesh = new THREE.Mesh(g, material);
+    mesh.name = "Слоистые скальные выходы";
+    world.add(mesh);
+    resources.push(g);
+  }
+  function top(x, z) {
+    const list = cells.get(Math.floor(x / 32) + "," + Math.floor(z / 32));
+    let highest = -Infinity;
+    if (!list) return highest;
+    for (const t of list) {
+      const dx = x - t.ax,
+        dz = z - t.az;
+      const u = (dx * t.cz - dz * t.cx) * t.inv,
+        v = (t.bx * dz - t.bz * dx) * t.inv;
+      if (u >= 0 && v >= 0 && u + v <= 1)
+        highest = Math.max(highest, t.ay + u * t.by + v * t.cy);
+    }
+    return highest;
+  }
+  return { top, resources };
+}
+
+// Angular chips below the cliff foot give the passing ground sub-metre
+// parallax. Each talus patch shares geometry and draws only within 185 m.
+function addScree(world, center, height, rng, section, wallSide, lips) {
+  const verts = [
+    [-1, 0, -0.34],
+    [-0.51, 0, -0.82],
+    [0.55, 0, -0.62],
+    [1, 0, 0.22],
+    [0.23, 0, 0.81],
+    [-0.79, 0, 0.55],
+  ];
+  const p = [];
+  for (let i = 0; i < verts.length; i++) {
+    const a = verts[i],
+      b = verts[(i + 1) % verts.length];
+    p.push(...a, -0.16, 0.53, 0.04, ...b);
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(p, 3));
+  geometry.computeVertexNormals();
+  const material = new THREE.MeshLambertMaterial({
+    color: 0xffffff,
+    side: THREE.DoubleSide,
+  });
+  const pebble = new THREE.Object3D(),
+    tint = new THREE.Color();
+  const patches = [];
+  function patch(z, cx, wet) {
+    const count = wet
+        ? 29 + Math.floor(rng() * 32)
+        : 18 + Math.floor(rng() * 58),
+      batch = new THREE.InstancedMesh(geometry, material, count);
+    const yaw = rng() * 2.8;
+    for (let i = 0; i < count; i++) {
+      const dz = (rng() + rng() - 1) * (wet ? 9 : 10 + rng() * 19),
+        x = cx + (rng() + rng() - 1) * (wet ? 5 : 7) + dz * 0.24,
+        pz = z + dz;
+      const r = 0.075 + Math.pow(rng(), 2.5) * (wet ? 0.97 : 0.62);
+      pebble.position.set(x, height(x, pz) - r * 0.045, pz);
+      pebble.rotation.set(
+        (rng() - 0.5) * 0.23,
+        yaw + (rng() - 0.5) * 1.3,
+        (rng() - 0.5) * 0.24,
+      );
+      pebble.scale.set(r * (1 + rng() * 0.91), r * (0.53 + rng() * 0.61), r);
+      pebble.updateMatrix();
+      batch.setMatrixAt(i, pebble.matrix);
+      tint.setHSL(
+        0.095 + rng() * 0.035,
+        0.045 + rng() * 0.082,
+        0.26 + rng() * 0.21,
+        THREE.SRGBColorSpace,
+      );
+      batch.setColorAt(i, tint);
+    }
+    batch.computeBoundingSphere();
+    batch.name = "Мелкая осыпь";
+    world.add(batch);
+    patches.push({ x: cx, z, batch });
+  }
+  for (let z = 110; z > -3550; z -= 16 + rng() * 33) {
+    const offset = (rng() < 0.5 ? -1 : 1) * (2 + rng() * 36);
+    patch(z, center(z) + offset, false);
+  }
+  for (
+    let z = -(lips[0].distance - 125);
+    z > -(lips[0].distance + 433);
+    z -= 12 + rng() * 13
+  ) {
+    const q = section(z),
+      side = rng() < 0.5 ? -1 : 1;
+    patch(z, q.bend + wallSide * q.brook + side * (2.1 + rng() * 2.4), true);
+  }
+  return {
+    update(x, z) {
+      for (const patch of patches)
+        patch.batch.visible =
+          (x - patch.x) ** 2 + (z - patch.z) ** 2 < 185 ** 2;
+    },
+    dispose() {
+      geometry.dispose();
+      material.dispose();
+      for (const p of patches) p.batch.dispose();
+    },
+  };
+}
+
+function gridAxis(lo, hi, spacing) {
+  const axis = [];
+  for (let x = lo; x < hi; x += spacing(x)) axis.push(x);
   axis.push(hi);
   return axis;
 }
@@ -404,142 +652,377 @@ function cell(axis, v) {
 export function createWorld(scene, seed) {
   const rng = randomSource(seed),
     noise = noiseSource(rng);
-  const phase = rng() * Math.PI * 2,
-    phase2 = rng() * Math.PI * 2;
+  // Each seed chooses a hanging traverse, a ravine or a crest. The piste is
+  // expressed in valley-relative coordinates, so the fine mesh follows its
+  // bends instead of spending detail on the far side of the range.
+  const style = String(seed) === "1847" ? 0 : Math.floor(rng() * 3);
+  const wallSide = String(seed) === "1847" ? -1 : rng() < 0.5 ? -1 : 1;
+  const phases = Array.from({ length: 6 }, () => rng() * Math.PI * 2);
+  const waves = [
+    [90 + rng() * 52, 510 + rng() * 150],
+    [26 + rng() * 18, 330 + rng() * 84],
+    [7 + rng() * 9, 210 + rng() * 64],
+  ];
   const center = (z) =>
-    122 * (Math.sin(z / 875 + phase) - Math.sin(phase)) +
-    47 * (Math.sin(z / 410 + phase2) - Math.sin(phase2));
-  const river = (z) =>
-    center(z) -
-    107 +
-    40 * Math.sin(z / 170 + phase) +
-    15 * Math.sin(z / 68 + phase2);
-  const floor = (z) =>
-    1300 + 0.32 * clamp(z, -3400, 500) + clamp(z + 3400, -2300, 0) * 0.055;
-  const peaks = [];
-  function peak(x, z, h, rx, rz) {
-    const angle = (rng() - 0.5) * 1.65;
-    peaks.push({ x, z, h, rx, rz, cos: Math.cos(angle), sin: Math.sin(angle) });
+    waves.reduce(
+      (x, [amplitude, period], i) =>
+        x +
+        amplitude * (Math.sin(z / period + phases[i]) - Math.sin(phases[i])),
+      -wallSide * 690 * smooth(3440, 6360, -z),
+    );
+  const start = style === 0 ? 1795 + rng() * 115 : 1610 + rng() * 360;
+  const grade = 0.309 + rng() * 0.037;
+  function floor(z) {
+    const along = clamp(z, -3550, 550);
+    return (
+      start +
+      along * grade +
+      9 * (Math.sin(along / 300 + phases[3]) - Math.sin(phases[3])) +
+      3.2 * (Math.sin(along / 184 + phases[4]) - Math.sin(phases[4])) +
+      Math.min(0, Math.max(-2000, z + 3550)) * 0.055
+    );
   }
-  for (const side of [-1, 1]) {
+  // A wing can coast off each convex rock lip. Beyond it the gully opens,
+  // then a long shallow reach brings the flight path back toward the ground.
+  const lips = [
+    {
+      distance: 492 + rng() * 55,
+      fall: 5.8 + rng() * 2.4,
+      crest: 1.7 + rng() * 0.65,
+      width: 13 + rng() * 6,
+      skew: (rng() - 0.5) * 0.25,
+    },
+    {
+      distance: 1881 + rng() * 54,
+      fall: 6.2 + rng() * 2.6,
+      crest: 1.5 + rng() * 0.81,
+      width: 14 + rng() * 7,
+      skew: (rng() - 0.5) * 0.31,
+    },
+  ];
+  function dropProfile(z, v) {
+    let drop = 0;
+    for (const lip of lips) {
+      const t = -z - lip.distance - clamp(v, -180, 180) * lip.skew;
+      if (t < -125 || t > 340) continue;
+      const cap =
+        lip.crest * smooth(-105, -3, t) -
+        (lip.crest + lip.fall) * smooth(-1, lip.width, t) +
+        lip.fall * smooth(23, 176, t);
+      const reveal =
+        (1 - smooth(100, 335, t)) *
+        smooth(0, 44, t) *
+        smooth(19, 90, -v) *
+        (1 - smooth(140, 345, -v)) *
+        (30 + lip.fall * 2.8);
+      drop += cap * (1 - smooth(104, 302, Math.abs(v))) - reveal;
+    }
+    return drop;
+  }
+  const section = (z) => {
+    const bend = center(z);
+    const a = noise(z / 229, 11),
+      b = noise(z / 462, 52),
+      c = noise(z / 133, 85);
+    const stream =
+      style === 1
+        ? 35 + 15 * b
+        : 119 + 54 * b + 16 * Math.sin(z / 216 + phases[1]);
+    const reach = -z - (lips[0].distance - 166);
+    const active = smooth(-110, -48, reach) * (1 - smooth(569, 662, reach));
+    // A tributary falls off the uphill terrace, runs along the flight line,
+    // crosses it on a slab, then drains into the main valley stream.
+    const channel =
+      9 + 3.8 * Math.sin(z / 54 + phases[3]) + 2 * Math.sin(z / 21 + phases[4]);
+    const across = mix(
+      channel,
+      -9 + 3 * Math.sin(z / 42 + phases[2]),
+      smooth(140, 300, reach),
+    );
+    const brook = mix(
+      mix(81 + 15 * b, across, smooth(-90, 55, reach)),
+      -stream,
+      smooth(385, 605, reach),
+    );
+    return {
+      z,
+      bend,
+      base: floor(z),
+      a,
+      b,
+      c,
+      stream,
+      brook,
+      active,
+      crest: 31 + 17 * a + 15 * b,
+      upper: 95 + 49 * c + 33 * b,
+      ledge: 19 + 51 * b,
+      second: 23 + 64 * a,
+      breach: smooth(0.19, 0.66, c * 0.76 + noise(z / 92, 62) * 0.24),
+      traverse: smooth(0.26, 0.7, noise(z / 760, 27)),
+    };
+  };
+  const river = (z) => {
+    const q = section(z);
+    return q.bend - wallSide * q.stream;
+  };
+  const peaks = [];
+  function peak(x, z, h, rx, rz, angle) {
+    const skew = rng() * 0.36;
+    peaks.push({
+      x,
+      z,
+      h,
+      rx,
+      rz,
+      c: Math.cos(angle),
+      s: Math.sin(angle),
+      skew,
+    });
+  }
+  // Interlocking asymmetric arêtes instead of isolated radial domes.
+  for (const side of [-1, 1])
     for (let band = 0; band < 3; band++) {
-      for (let z = -11200; z < 6700; z += 650 + rng() * 700) {
+      for (let z = -11300; z < 6500; z += 660 + rng() * 830) {
         const dist =
-          band === 0
-            ? 1280 + rng() * 850
-            : 2850 + (band - 1) * 2300 + rng() * 1100;
-        const h = (band === 0 ? 980 : 1670) + rng() * (band === 0 ? 930 : 1050);
+          (band === 0 ? 1020 : 2450 + (band - 1) * 2200) +
+          rng() * (band === 0 ? 680 : 1100);
+        const h = (band === 0 ? 850 : 1510) + rng() * (band === 0 ? 980 : 1190);
+        const x = center(z) + side * dist,
+          heading = (rng() - 0.5) * 1.5;
         peak(
-          center(z) + side * dist,
+          x,
           z,
           h,
-          h * (0.95 + rng() * 0.45),
-          h * (0.84 + rng() * 0.47),
+          h * (0.8 + rng() * 0.41),
+          h * (0.82 + rng() * 0.63),
+          heading,
+        );
+        peak(
+          x - side * (90 + rng() * 290),
+          z + 210 + rng() * 230,
+          h * (0.65 + rng() * 0.19),
+          h * 0.93,
+          h * 0.46,
+          heading + 0.35,
         );
       }
     }
-  }
-  for (let z = -11400; z < -4950; z += 1650) {
-    for (let x = -3200; x <= 3200; x += 860 + rng() * 440) {
-      const h = 1650 + rng() * 1300;
+  for (let z = -11600; z < -4700; z += 1330)
+    for (let x = -3800; x <= 3800; x += 840 + rng() * 570) {
+      const h = 1540 + rng() * 1230;
       peak(
         x + (rng() - 0.5) * 450,
-        z + (rng() - 0.5) * 700,
+        z + (rng() - 0.5) * 720,
         h,
-        h * (0.75 + rng() * 0.37),
-        h * (0.78 + rng() * 0.44),
+        h * (0.66 + rng() * 0.38),
+        h * (0.69 + rng() * 0.41),
+        rng() * 1.6,
       );
     }
-  }
-  // Populate z buckets once, keeping generation fast when changing lines.
   const buckets = new Map();
   for (const p of peaks) {
-    const span = Math.max(p.rx, p.rz) * 1.35 + 350;
+    const span = Math.max(p.rx, p.rz) * 1.6 + 310;
     for (
-      let k = Math.floor((p.z - span) / 500);
-      k <= Math.floor((p.z + span) / 500);
-      k++
+      let i = Math.floor((p.z - span) / 500);
+      i <= Math.floor((p.z + span) / 500);
+      i++
     ) {
-      if (!buckets.has(k)) buckets.set(k, []);
-      buckets.get(k).push(p);
+      if (!buckets.has(i)) buckets.set(i, []);
+      buckets.get(i).push(p);
     }
   }
-  function rawHeight(x, z) {
-    const valley = Math.abs(x - center(z));
-    const close = smooth(68, 1110, valley);
-    const closure = smooth(4110, 5990, -z);
-    const mass = Math.max(close, closure);
-    const warpX =
-      (noise(x / 675, z / 675) - 0.5) * 260 +
-      (noise(x / 201 + 32, z / 201) - 0.5) * 57;
-    const warpZ =
-      (noise(x / 743 + 17, z / 743) - 0.5) * 240 +
-      (noise(x / 211, z / 211 + 7) - 0.5) * 67;
-    let mountain = 0;
+  function mountainRelief(x, z) {
+    const wx =
+      (noise(x / 674, z / 674) - 0.5) * 173 +
+      (noise(x / 211 + 32, z / 211) - 0.5) * 42;
+    const wz =
+      (noise(x / 743 + 17, z / 743) - 0.5) * 188 +
+      (noise(x / 210, z / 210 + 7) - 0.5) * 53;
+    let summit = 0;
     for (const p of buckets.get(Math.floor(z / 500)) || []) {
-      const dx = x + warpX - p.x,
-        dz = z + warpZ - p.z;
-      const a = Math.abs(dx * p.cos + dz * p.sin) / p.rx;
-      const b = Math.abs(dz * p.cos - dx * p.sin) / p.rz;
-      const d = Math.max(a + b * 0.37, b + a * 0.34);
-      mountain = Math.max(mountain, p.h * (1 - d));
+      const dx = x + wx - p.x,
+        dz = z + wz - p.z;
+      const u = (dx * p.c + dz * p.s) / p.rx,
+        v = (dz * p.c - dx * p.s) / p.rz;
+      const d =
+        Math.max(
+          0.93 * u + v * 0.33,
+          -u * 0.87 + v * 0.4,
+          0.91 * v - u * 0.32,
+          -v * 1.08 + u * 0.27,
+          -0.74 * u - 0.65 * v,
+          0.76 * u - 0.59 * v,
+        ) +
+        p.skew * Math.abs(u + v * 0.25);
+      summit = Math.max(summit, p.h * (1 - d));
     }
-    const basin = noise(x / 620, z / 620);
-    const hills = 32 + basin * 220;
-    let land = Math.max(mountain, hills);
-    const ridge =
-      1 -
-      Math.abs(2 * noise(x / 316 + warpX * 0.003, z / 342 + warpZ * 0.003) - 1);
-    land +=
-      (ridge - 0.63) * 180 +
-      (noise(x / 113, z / 113) - 0.5) * 89 +
-      (noise(x / 48, z / 48) - 0.5) * 29;
-    const fold = noise(x / 590 + warpZ * 0.003, z / 153 + warpX * 0.004);
-    const cleft = 1 - Math.abs(fold * 2 - 1);
-    land -= Math.pow(cleft, 4) * 105 * smooth(195, 880, mountain);
-    const lowland =
-      (noise(x / 171, z / 171) - 0.5) * 24 + (noise(x / 65, z / 65) - 0.5) * 5;
-    const bed = river(z) - x;
+    const fold =
+      1 - Math.abs(noise(x / 420 + wz * 0.003, z / 157 + wx * 0.003) * 2 - 1);
+    const spine =
+      1 - Math.abs(noise(x / 310 + wx * 0.004, z / 340 + wz * 0.003) * 2 - 1);
+    let mass =
+      Math.max(44 + noise(x / 530, z / 530) * 170, summit) +
+      (spine - 0.58) * 142 +
+      (noise(x / 107, z / 110) - 0.5) * 66 +
+      (noise(x / 40, z / 46) - 0.5) * 19 -
+      Math.pow(fold, 3) * 139 * smooth(130, 850, summit);
+    // Resistant bedding makes slanting plateaux and broken rock faces on
+    // selected spurs. The dip direction is independent of the valley slope.
+    const dip = x * 0.115 - z * 0.063 + 34 * (noise(x / 460, z / 460) - 0.5);
+    const strat = (mass - dip) / 75,
+      frac = strat - Math.floor(strat);
+    const band = smooth(0.15, 0.77, noise(x / 650 + 36, z / 650));
+    mass += 75 * (smooth(0.62, 0.89, frac) - frac) * band * 0.81;
+    return mass;
+  }
+  function bench(v, z, q) {
+    const d = Math.abs(v),
+      positive = v >= 0;
+    const joint =
+      (noise(v / 43 + 31, z / 59) - 0.5) * 9 +
+      (noise(v / 130, z / 136) - 0.5) * 19;
+    const inner = positive ? q.crest : q.crest + 8;
+    const outer = q.upper + (positive ? 0 : 14);
+    const u = d + joint * smooth(20, 63, d);
+    const ledge =
+      smooth(inner - 3, inner + 7, u) * (q.ledge * (0.35 + 0.65 * q.breach)) +
+      smooth(outer - 3, outer + 11, u) * q.second;
+    const sloping = Math.max(0, u - inner) * (0.1 + 0.1 * q.c);
+    const talus = (ledge + sloping) * (1 - smooth(259, 590, d));
+    const stream = q.stream;
+    const foundation =
+      -smooth(25, 48, u) * (13 + 15 * q.a) -
+      smooth(64, 88, u) * (8 + 16 * q.c) -
+      smooth(82, stream + 8, u) * 17;
+    const opposite = d - stream - 16;
+    const rebound =
+      Math.max(0, opposite) * 0.31 + smooth(34, 50, opposite) * (14 + 23 * q.b);
+    const cut = (foundation + rebound) * (1 - smooth(306, 620, d));
+    if (style === 0) return positive ? talus : cut;
+    if (style === 1)
+      return positive
+        ? talus
+        : talus * smooth(stream + 4, stream + 29, d) -
+            6 * smooth(16, stream, d);
+    const spur = positive ? q.traverse : 1 - q.traverse;
+    return mix(cut, talus, smooth(0.47, 0.86, spur)) * (0.85 + 0.2 * q.b);
+  }
+  function rawHeight(x, z, q = section(z)) {
+    const v = (x - q.bend) * wallSide,
+      d = Math.abs(v);
+    const closure = smooth(6030, 8530, -z);
+    const mountainMix = Math.max(smooth(155, 1070, d), closure);
+    const large = mountainMix > 0 ? mountainRelief(x, z) * mountainMix : 0;
+    const camber =
+      v *
+      (0.013 + 0.025 * Math.sin(z / 315 + phases[4])) *
+      (1 - smooth(30, 120, d));
+    const rugged = smooth(17, 140, d);
+    const fine = (noise(x / 18, z / 21) - 0.5) * (0.22 + rugged * 2.1);
+    const terrace = bench(v, z, q);
+    const bed = v + q.stream;
+    const brook =
+      q.active * (1 - smooth(1, 8, Math.abs(v - q.brook))) * (1.3 + 0.56 * q.c);
+    const channel =
+      (1 - smooth(1, 13.5, Math.abs(bed))) * (3.1 + q.b * 3.2) * (1 - closure);
     return (
-      floor(z) +
-      land * mass +
-      lowland * (1 - 0.55 * mass) -
-      5 * Math.exp((-bed * bed) / 710) * (1 - closure)
+      q.base +
+      camber +
+      fine +
+      terrace +
+      large +
+      dropProfile(z, v) +
+      rugged * (noise(x / 104, z / 121) - 0.5) * 12 -
+      channel -
+      brook
+    );
+  }
+  function stoneCover(v, z, q, relief) {
+    const d = Math.abs(v);
+    const layer = noise((v + z * 0.21) / 95, z / 115);
+    const onLine = 0.1 + 0.44 * smooth(0.25, 0.7, layer) + 0.14 * q.c;
+    const banks = smooth(18, 64, d) * (1 - smooth(200, 650, d));
+    const flagstone = v > 0 || style === 1 ? 0.24 + q.breach * 0.38 : 0.17;
+    let cap = 0;
+    for (const lip of lips) {
+      const t = -z - lip.distance - v * lip.skew;
+      cap = Math.max(
+        cap,
+        smooth(-69, -8, t) * (1 - smooth(17, 83, t)) * (1 - smooth(70, 176, d)),
+      );
+    }
+    const scree = q.active * (1 - smooth(5, 31, Math.abs(v - q.brook)));
+    return clamp(
+      onLine * (1 - smooth(90, 320, d)) +
+        banks * flagstone +
+        cap * 0.68 +
+        scree * 0.45 +
+        smooth(220, 920, relief) * 0.35,
+      0,
+      1,
     );
   }
   const world = new THREE.Group();
   scene.add(world);
-  const xs = gridAxis(-9100, 9100, -1540, 1540),
-    zs = gridAxis(-12000, 5600, -4110, 490);
-  const w = xs.length,
+  const xs = gridAxis(
+    -9100,
+    9100,
+    (u) => 4.3 + Math.min(145, Math.max(0, Math.abs(u) - 143) * 0.039),
+  );
+  const zs = gridAxis(
+    -12000,
+    5600,
+    (z) => 10 + Math.min(180, Math.max(-3770 - z, z - 480, 0) * 0.049),
+  );
+  for (const lip of lips) {
+    for (let dx = -23; dx < 34; dx += 3) {
+      const z = -lip.distance + dx;
+      if (zs.every((row) => Math.abs(z - row) > 1.3)) zs.push(z);
+    }
+  }
+  zs.sort((a, b) => a - b);
+  const rows = zs.map(section),
+    w = xs.length,
     h = zs.length,
     count = w * h;
   const pos = new Float32Array(count * 3),
-    env = new Float32Array(count * 4),
-    heights = new Float32Array(count);
+    env = new Float32Array(count * 4);
+  const heights = new Float32Array(count),
+    rockCover = new Float32Array(count),
+    torrent = new Float32Array(count * 2);
   const index = new Uint32Array((w - 1) * (h - 1) * 6);
-  for (let j = 0; j < h; j++)
+  for (let j = 0; j < h; j++) {
+    const q = rows[j],
+      z = zs[j];
     for (let i = 0; i < w; i++) {
       const id = j * w + i,
-        x = xs[i],
-        z = zs[j],
-        y = rawHeight(x, z);
+        u = xs[i],
+        x = q.bend + u,
+        y = rawHeight(x, z, q);
       pos[id * 3] = x;
       pos[id * 3 + 1] = heights[id] = y;
       pos[id * 3 + 2] = z;
-      env[id * 4] = y - floor(z);
-      env[id * 4 + 2] = z < -4730 ? 1000 : x - river(z);
+      env[id * 4] = y - q.base;
+      env[id * 4 + 2] = z < -5630 ? 1000 : u + wallSide * q.stream;
+      torrent[id * 2] = u * wallSide - q.brook;
+      torrent[id * 2 + 1] = q.active;
+      rockCover[id] = stoneCover(u * wallSide, z, q, y - q.base);
       if (i === w - 1 || j === h - 1) continue;
-      const at = (j * (w - 1) + i) * 6;
-      index.set([id, id + w, id + 1, id + 1, id + w, id + w + 1], at);
+      index.set(
+        [id, id + w, id + 1, id + 1, id + w, id + w + 1],
+        (j * (w - 1) + i) * 6,
+      );
     }
-  function height(x, z) {
-    if (x < xs[0] || x > xs[w - 1] || z < zs[0] || z > zs[h - 1])
-      return rawHeight(x, z);
-    const i = cell(xs, x),
-      j = cell(zs, z),
-      a = (x - xs[i]) / (xs[i + 1] - xs[i]),
+  }
+  function groundHeight(x, z) {
+    if (z < zs[0] || z > zs[h - 1]) return rawHeight(x, z);
+    const j = cell(zs, z),
       b = (z - zs[j]) / (zs[j + 1] - zs[j]);
+    const u = x - mix(rows[j].bend, rows[j + 1].bend, b);
+    if (u < xs[0] || u > xs[w - 1]) return rawHeight(x, z);
+    const i = cell(xs, u),
+      a = (u - xs[i]) / (xs[i + 1] - xs[i]);
     const id = j * w + i;
     if (a + b < 1)
       return (
@@ -547,13 +1030,18 @@ export function createWorld(scene, seed) {
         a * (heights[id + 1] - heights[id]) +
         b * (heights[id + w] - heights[id])
       );
-    const t = heights[id + w + 1];
+    const top = heights[id + w + 1];
     return (
-      t + (1 - a) * (heights[id + w] - t) + (1 - b) * (heights[id + 1] - t)
+      top +
+      (1 - a) * (heights[id + w] - top) +
+      (1 - b) * (heights[id + 1] - top)
     );
   }
+  let height = groundHeight;
   const land = new THREE.BufferGeometry();
   land.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  land.setAttribute("bedrock", new THREE.BufferAttribute(rockCover, 1));
+  land.setAttribute("torrent", new THREE.BufferAttribute(torrent, 2));
   land.setIndex(new THREE.BufferAttribute(index, 1));
   land.computeVertexNormals();
   const normals = land.getAttribute("normal").array;
@@ -571,7 +1059,7 @@ export function createWorld(scene, seed) {
   for (let j = 0; j < h; j++)
     for (let i = 0; i < w; i++) {
       const id = j * w + i,
-        x = xs[i],
+        x = rows[j].bend + xs[i],
         z = zs[j],
         y = heights[id];
       env[id * 4 + 1] = forest(x, z, y, normals[id * 3 + 1]);
@@ -589,6 +1077,7 @@ export function createWorld(scene, seed) {
   const atlas = groundAtlas(rng),
     material = landMaterial();
   material.uniforms.atlas.value = atlas;
+  material.uniforms.snowline.value = 1960 + 90 * Math.sin(phases[0]);
   let disposed = false;
   loadPhotos().forEach((task, i) =>
     task.then((texture) => {
@@ -627,8 +1116,16 @@ export function createWorld(scene, seed) {
         geometry.setAttribute(name, attribute);
       geometry.setDrawRange(first, offset - first);
       geometry.boundingBox = new THREE.Box3(
-        new THREE.Vector3(xs[col], low, zs[row]),
-        new THREE.Vector3(xs[xEnd], high, zs[zEnd]),
+        new THREE.Vector3(
+          xs[col] + Math.min(...rows.slice(row, zEnd + 1).map((q) => q.bend)),
+          low,
+          zs[row],
+        ),
+        new THREE.Vector3(
+          xs[xEnd] + Math.max(...rows.slice(row, zEnd + 1).map((q) => q.bend)),
+          high,
+          zs[zEnd],
+        ),
       );
       geometry.boundingSphere = geometry.boundingBox.getBoundingSphere(
         new THREE.Sphere(),
@@ -646,215 +1143,60 @@ export function createWorld(scene, seed) {
     world.add(tile);
   }
 
-  const spruce = makeSpruce(),
-    needleMap = spruceAtlas();
-  const leaves = new THREE.MeshBasicMaterial({
-    map: needleMap,
-    side: THREE.DoubleSide,
-    alphaTest: 0.38,
+  const lightAt = (x, z) =>
+    env[(cell(zs, z) * w + cell(xs, x - center(z))) * 4 + 3];
+  const rockFaces = crags({
+    world,
+    groundHeight,
+    center,
+    floor,
+    wallSide,
+    style,
+    rng: randomSource(seed + "/escarpments"),
+    material,
+    lightAt,
+    lips,
   });
-  leaves.onBeforeCompile = (shader) => {
-    shader.fragmentShader = shader.fragmentShader.replace(
-      "#include <fog_fragment>",
-      `
-      #ifdef USE_FOG
-        float treeHaze=smoothstep(420.,3100.,vFogDepth)*.62;
-        gl_FragColor.rgb=mix(gl_FragColor.rgb,vec3(.36,.405,.332),treeHaze);
-      #endif
-      #include <fog_fragment>
-    `,
-    );
-  };
-  const stoneGeometry = new THREE.IcosahedronGeometry(1, 1);
-  const rockVertices = stoneGeometry.getAttribute("position");
-  const rockColors = [];
-  const rockTint = new THREE.Color(0x9b978a);
-  for (let i = 0; i < rockVertices.count; i++) {
-    const x = rockVertices.getX(i),
-      y = rockVertices.getY(i),
-      z = rockVertices.getZ(i);
-    const k = 0.81 + 0.28 * noise(x * 2.6 + 32, z * 2.6 + y * 1.5);
-    rockVertices.setXYZ(i, x * k, y * k, z * k);
-    const shade = 0.82 + 0.22 * noise(x * 5 + y * 2, z * 5);
-    rockColors.push(rockTint.r * shade, rockTint.g * shade, rockTint.b * shade);
-  }
-  stoneGeometry.setAttribute(
-    "color",
-    new THREE.Float32BufferAttribute(rockColors, 3),
-  );
-  stoneGeometry.computeVertexNormals();
-  const stoneMaterial = new THREE.MeshLambertMaterial({ vertexColors: true });
-  const matrix = new THREE.Object3D(),
-    tint = new THREE.Color();
-  const groups = new Map(),
-    obstacles = new Map();
-  const bucketSize = 32;
-  function addObstacle(kind, x, y, z, size, width) {
-    const radius = kind === "tree" ? size * width * 0.235 : size * width * 1.12;
-    const shape = { kind, x, y, z, size, radius };
-    for (
-      let i = Math.floor((x - radius) / bucketSize);
-      i <= Math.floor((x + radius) / bucketSize);
-      i++
-    ) {
-      for (
-        let j = Math.floor((z - radius) / bucketSize);
-        j <= Math.floor((z + radius) / bucketSize);
-        j++
-      ) {
-        const key = i + "," + j;
-        if (!obstacles.has(key)) obstacles.set(key, []);
-        obstacles.get(key).push(shape);
-      }
-    }
-  }
-  function hitsObstacle(x, y, z) {
-    const objects = obstacles.get(
-      Math.floor(x / bucketSize) + "," + Math.floor(z / bucketSize),
-    );
-    if (!objects) return false;
-    for (const object of objects) {
-      const t = (y - object.y) / object.size;
-      let radius = object.radius;
-      if (object.kind === "tree") {
-        if (t < 0 || t > 1.02) continue;
-        const crown =
-          t < 0.12
-            ? 0.046
-            : Math.pow(Math.max(0, (1.02 - t) / 0.88), 0.72) * 0.9;
-        radius = radius * crown + 0.1;
-      } else {
-        if (Math.abs(t) >= 1) continue;
-        radius *= Math.sqrt(1 - t * t) * 0.9;
-      }
-      if ((x - object.x) ** 2 + (z - object.z) ** 2 <= radius * radius)
-        return true;
-    }
-    return false;
-  }
-  function addInstance(kind, x, z, size, wide, shade) {
-    const key = `${kind},${Math.floor(x / 800)},${Math.floor(z / 800)}`;
-    if (!groups.has(key)) groups.set(key, { kind, items: [] });
-    matrix.position.set(
-      x,
-      height(x, z) - (kind === "tree" ? 0.22 : size * 0.17),
-      z,
-    );
-    addObstacle(kind, x, matrix.position.y, z, size, wide);
-    matrix.rotation.set(
-      kind === "rock" ? rng() * 0.75 : 0,
-      rng() * Math.PI * 2,
-      kind === "rock" ? rng() * 0.5 : 0,
-    );
-    matrix.scale.set(size * wide, size, size * (kind === "tree" ? wide : 1.17));
-    matrix.updateMatrix();
-    groups.get(key).items.push({ matrix: matrix.matrix.clone(), shade });
-  }
-  const shadows = [];
-  for (let n = 0; n < 59000; n++) {
-    const z = 1050 - rng() * 6900;
-    const x = center(z) + (rng() - 0.5) * (n < 38000 ? 3270 : 1150);
-    const y = height(x, z),
-      dx = (height(x + 5, z) - height(x - 5, z)) / 10,
-      dz = (height(x, z + 5) - height(x, z - 5)) / 10;
-    const ny = 1 / Math.hypot(dx, 1, dz);
-    if (
-      rng() > 0.021 + forest(x, z, y, ny) * 0.83 ||
-      ny < 0.6 ||
-      y > 1850 ||
-      Math.abs(x - river(z)) < 11
-    )
-      continue;
-    const size = 5.2 + rng() * 12.0 + (1 - smooth(700, 1500, y)) * 3.6;
-    const lightOnSlope = Math.max(
-      0,
-      (-dx * sunlight.x + sunlight.y - dz * sunlight.z) * ny,
-    );
-    const terrainLight = env[(cell(zs, z) * w + cell(xs, x)) * 4 + 3];
-    const treeLight = 0.52 + 0.48 * lightOnSlope * terrainLight;
-    addInstance(
-      "tree",
-      x,
-      z,
-      size,
-      0.83 + rng() * 0.39,
-      (0.8 + rng() * 0.38) * treeLight,
-    );
-    const width = size * 0.24,
-      length = size * 0.84;
-    // Short, terrain-following contact shadows anchor each tree to the meadow.
-    for (const [du, dv] of [
-      [-0.67, 0],
-      [0, 1.05],
-      [1.0, 0.37],
-      [-0.67, 0],
-      [1, 0.37],
-      [0, -0.06],
-    ]) {
-      const sx = x + du * width * 0.36 + dv * length,
-        sz = z - du * width + dv * length * 0.39;
-      shadows.push(sx, height(sx, sz) + 0.15, sz);
-    }
-  }
-  for (let n = 0; n < 3400; n++) {
-    const z = 780 - rng() * 5500,
-      x = center(z) + (rng() - 0.5) * 1760;
-    const inScree =
-      Math.abs(x - river(z)) < 28 || Math.abs(x - center(z)) > 450;
-    const size = 0.28 + Math.pow(rng(), 3.1) * (inScree ? 4.3 : 2.1);
-    addInstance("rock", x, z, size, 1 + rng() * 0.65, 0.75 + rng() * 0.46);
-  }
-  for (const { kind, items } of groups.values()) {
-    const batch = new THREE.InstancedMesh(
-      kind === "tree" ? spruce : stoneGeometry,
-      kind === "tree" ? leaves : stoneMaterial,
-      items.length,
-    );
-    items.forEach((item, id) => {
-      batch.setMatrixAt(id, item.matrix);
-      tint.setRGB(item.shade, item.shade, item.shade);
-      batch.setColorAt(id, tint);
-    });
-    batch.computeBoundingSphere();
-    world.add(batch);
-  }
-  const shadowGeometry = new THREE.BufferGeometry();
-  shadowGeometry.setAttribute(
-    "position",
-    new THREE.Float32BufferAttribute(shadows, 3),
-  );
-  const shadowMaterial = new THREE.MeshBasicMaterial({
-    color: 0x35443e,
-    transparent: true,
-    opacity: 0.22,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-    polygonOffset: true,
-    polygonOffsetFactor: -1,
+  height = (x, z) => Math.max(groundHeight(x, z), rockFaces.top(x, z));
+  const vegetation = createVegetation({
+    scene: world,
+    seed,
+    height,
+    center,
+    river,
+    forest: (x, z, y, ny) =>
+      rockFaces.top(x, z) > groundHeight(x, z) - 0.25 ? 0 : forest(x, z, y, ny),
   });
-  world.add(new THREE.Mesh(shadowGeometry, shadowMaterial));
+  const gravel = addScree(
+    world,
+    center,
+    height,
+    randomSource(seed + "/scree"),
+    section,
+    wallSide,
+    lips,
+  );
+  function update(x, z, heading) {
+    vegetation.update(x, z, heading);
+    gravel.update(x, z);
+  }
+  update(center(0), 0, 0);
   return {
     height,
     center,
-    hitsObstacle,
+    update,
+    hitsObstacle: vegetation.hitsObstacle,
     dispose() {
       disposed = true;
-      needleMap?.dispose();
       scene.remove(world);
-      world.traverse((obj) => {
-        if (obj.isInstancedMesh) obj.dispose();
-      });
+      vegetation.dispose();
+      gravel.dispose();
       for (const asset of [
+        ...rockFaces.resources,
         ...tiles,
         land,
         material,
         atlas,
-        spruce,
-        leaves,
-        stoneGeometry,
-        stoneMaterial,
-        shadowGeometry,
-        shadowMaterial,
       ])
         asset.dispose();
     },

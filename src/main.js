@@ -34,7 +34,7 @@ let seed = firstSeed,
   number = 1,
   title = lineNames[0],
   mode = "loading",
-  cam = 0,
+  cam = 1,
   targetTrim = 0.5;
 let scene,
   flight,
@@ -67,6 +67,7 @@ function saveRun(status) {
       style,
       time: s.time,
       passed: s.passed,
+      proximityDistance: Math.round(s.proximityDistance),
       total: flight.gates.length,
       rolls: s.rolls,
       status,
@@ -146,7 +147,6 @@ function generated(newSeed, newNumber) {
   $("lineNo").textContent = "ЛИНИЯ " + String(number).padStart(3, "0");
   configureStart();
   saved = false;
-  cam = 0;
   snap = true;
   simTime = 0;
   setMode("preview");
@@ -180,7 +180,7 @@ function launch() {
   saved = false;
   simTime = 0;
   snap = true;
-  cam = 0;
+  sound.resume().catch(() => {});
   clearInputs();
   setMode("flying");
   updateHUD();
@@ -247,6 +247,8 @@ function updateHUD() {
       ? "Бочки · " + s.rolls
       : s.passed + " / " + flight.gates.length + " пройдено";
   $("clock").textContent = clock(s.time);
+  $("lowDistance").textContent =
+    formatter.format(Math.round(s.proximityDistance ?? 0)) + " м";
 }
 function showPanel(content, kind) {
   if (!panel.open) {
@@ -275,7 +277,7 @@ function closePanel(resume = true) {
 }
 function guide() {
   showPanel(
-    "<h2>Управление крылом</h2><p>Веди крыло через оранжевые ворота до конца долины. В режиме «Свободный полёт» старт выше, на 350 м над склоном — есть запас высоты для бочек и спиралей. Следи за высотой над склоном и скоростью снижения.</p>" +
+    "<h2>Управление крылом</h2><p>На проксимити-линии центры ворот находятся в 8–11 м над склоном. Оранжевые флажки показывают коридор между воротами. Счётчик «Ниже 15 м» измеряет пройденное у склона расстояние. В режиме «Свободный полёт» старт выше, на 350 м над склоном — есть запас высоты для бочек и спиралей. Следи за высотой над склоном и скоростью снижения.</p>" +
       [
         ["<kbd>A</kbd> / <kbd>←</kbd>", "Левая клеванта"],
         ["<kbd>D</kbd> / <kbd>→</kbd>", "Правая клеванта"],
@@ -288,7 +290,7 @@ function guide() {
             '<div class="entry"><span>' + k + "</span><b>" + v + "</b></div>",
         )
         .join("") +
-      "<h3>Крен и энергия</h3><p>Открытые триммеры ускоряют крыло и делают траекторию круче. Одна зажатая клеванта затягивает спираль. Для игровой бочки набери скорость, создай заметный крен и резко переложи клеванту на другую сторону. Долгое удержание обеих клевант гасит скорость.</p><p>Манёвры рассчитаны для этой игры. На сенсорном экране доступны две клеванты и кнопки триммеров T− и T+.</p>",
+      "<h3>Крен и энергия</h3><p>Открытые триммеры ускоряют крыло и делают траекторию круче. Одна зажатая клеванта затягивает спираль. При перекладке крыло и подвеска раскачиваются. В игре глубина крена и момент отпускания определяют, закончится ли перекладка разворотом или бочкой. Выход из разгона занимает время и высоту. Долгое удержание обеих клевант гасит скорость.</p><p>Манёвры рассчитаны для этой игры. На сенсорном экране доступны две клеванты и кнопки триммеров T− и T+.</p>",
     "help",
   );
 }
@@ -315,6 +317,9 @@ function journal() {
       label +
       " · " +
       clock(r.time) +
+      (Number.isFinite(r.proximityDistance)
+        ? " · у склона " + formatter.format(r.proximityDistance) + " м"
+        : "") +
       "</small></span><span>" +
       (r.style === "free"
         ? "Бочки · " + Number(r.rolls)
@@ -356,6 +361,10 @@ function finish() {
           ? ["Режим", "Свободный полёт"]
           : ["Пройдено ворот", s.passed + " / " + flight.gates.length],
         ["Дистанция", (s.distance / 1000).toFixed(2).replace(".", ",") + " км"],
+        [
+          "Ниже 15 м над склоном",
+          formatter.format(Math.round(s.proximityDistance)) + " м",
+        ],
         ["Бочки", s.rolls],
       ]
         .map(
@@ -416,16 +425,21 @@ function camera() {
   }
 }
 $("changeCam").onclick = camera;
+function syncSoundButton() {
+  const on = sound.enabled;
+  const button = $("sound");
+  button.firstElementChild.dataset.i = on ? "sound" : "mute";
+  icons(button);
+  const label = on ? "Выключить звук" : "Включить звук";
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.setAttribute("aria-pressed", String(on));
+}
+syncSoundButton();
 $("sound").onclick = async () => {
   try {
     const on = await sound.toggle();
-    const i = $("sound").firstElementChild;
-    i.dataset.i = on ? "sound" : "mute";
-    icons($("sound"));
-    const label = on ? "Выключить звук" : "Включить звук";
-    $("sound").title = label;
-    $("sound").setAttribute("aria-label", label);
-    $("sound").setAttribute("aria-pressed", String(on));
+    syncSoundButton();
     notify(on ? "Звук включён" : "Звук выключен");
   } catch {
     notify("Звук недоступен");
@@ -566,7 +580,7 @@ function frame(now) {
       updateHUD();
       hudTime = now;
     }
-    sound.update(flight.state.speed, mode === "flying");
+    sound.update(flight.state, mode === "flying");
   }
   requestAnimationFrame(frame);
 }

@@ -448,7 +448,14 @@ export function createWing() {
     lineSet(brakes, 0xa84a2c, 0.76),
   ];
   const scratch = new THREE.Vector3();
-  function update(left = 0, right = 0, trim = 0, time = 0, bank = 0) {
+  function update(
+    left = 0,
+    right = 0,
+    trim = 0,
+    time = 0,
+    bank = 0,
+    canopyLead = 0,
+  ) {
     const l = clamp(left, 0, 1),
       r = clamp(right, 0, 1),
       tr = clamp(trim, 0, 1);
@@ -457,6 +464,7 @@ export function createWing() {
       0.025 * Math.sin(time * 1.9),
       0.018 * Math.cos(time * 1.7),
     );
+    sail.rotation.z = -canopyLead;
     for (const skin of skins) {
       skin.morphTargetInfluences[0] = l;
       skin.morphTargetInfluences[1] = r;
@@ -488,6 +496,7 @@ export function createWing() {
               .addScaledVector(end.l, l)
               .addScaledVector(end.r, r)
               .addScaledVector(end.trim, tr)
+              .applyQuaternion(sail.quaternion)
               .add(sail.position);
           else scratch.copy(end);
           set.attribute.setXYZ(index++, scratch.x, scratch.y, scratch.z);
@@ -502,7 +511,7 @@ export function createWing() {
     for (const texture of textures) texture.dispose();
     group.removeFromParent();
   }
-  return { group, update, dispose };
+  return { group, canopy: sail, update, dispose };
 }
 
 // Local first-person rig. Its origin is the camera eye, looking down -Z.
@@ -783,7 +792,14 @@ export function createCockpit() {
     sides.push({ side, base, riser, grip, linePoints, pull: 0 });
   }
   let previousTime;
-  function update(left = 0, right = 0, trim = 0, time = 0, aspect = 1.75) {
+  function update(
+    left = 0,
+    right = 0,
+    trim = 0,
+    time = 0,
+    aspect = 1.75,
+    fov = 55,
+  ) {
     const dt =
       previousTime === undefined ? 1 / 60 : clamp(time - previousTime, 0, 0.05);
     previousTime = time;
@@ -791,14 +807,14 @@ export function createCockpit() {
     const rigScale = clamp(aspect / 1.12, 0.53, 1);
     const offset = Math.max(
       0.08,
-      0.74 * Math.tan(THREE.MathUtils.degToRad(27.5)) * aspect * 0.72,
+      0.74 * Math.tan(THREE.MathUtils.degToRad(fov * 0.5)) * aspect * 0.72,
     );
     for (const state of sides) {
       const { side, base, grip, riser, linePoints } = state;
       state.pull +=
         (clamp(side < 0 ? left : right, 0, 1) - state.pull) * smooth;
       const pull = state.pull;
-      base.position.set(side * offset, -0.015, -0.74);
+      base.position.set(side * offset, -0.015 - (fov - 55) * 0.0034, -0.74);
       base.scale.set(side * rigScale, rigScale, rigScale);
       const airborne = Math.sin(time * 1.87 + side * 0.35);
       grip.position.set(
