@@ -56,7 +56,8 @@ const neutralAngle = (trim) => -Math.atan(glideSlope(trim));
 export function createFlight(world, seed = 1) {
   const gates = makeCourse(world, seed);
   const state = {};
-  let bankVelocity, lastUpright;
+  let bankVelocity, lastUpright, canopyDeflection, deflectionRate;
+  let spiralArc, spiralDirection, invertedSide;
 
   function reset(style = "line") {
     const first = gates[0];
@@ -80,6 +81,11 @@ export function createFlight(world, seed = 1) {
       heading,
       bank: 0,
       bankRate: 0,
+      weight: 0,
+      loadFactor: Math.cos(pitch),
+      recoveryLoad: 0,
+      spirals: 0,
+      inSpiral: false,
       canopyBank: 0,
       pitch,
       pitchRate: 0,
@@ -103,29 +109,72 @@ export function createFlight(world, seed = 1) {
     });
     bankVelocity = 0;
     lastUpright = 0;
+    invertedSide = 0;
+    canopyDeflection = 0;
+    deflectionRate = 0;
+    spiralArc = 0;
+    spiralDirection = 0;
     return state;
   }
 
-  function updateBank(dt, differential, commonBrake) {
-    // A suspended pilot and the canopy behave like a driven, damped pendulum.
-    // Gravity changes sign beyond vertical. A reversal can use existing angular
-    // momentum to clear the top; releasing or countering the brake changes the outcome.
-    const authority =
-      0.72 + 0.13 * clamp((state.speed - 13) / 12, 0, 1.15) + 0.04 * state.trim;
-    const restoring = 5.8;
+  function updateBank(dt, differential, brake, pressure) {
+    // The canopy responds first. The suspended mass follows as the lines
+    // transmit the lateral component of the aerodynamic force.
+    const steering = differential * (0.19 + 0.14 * Math.min(pressure, 2));
+    deflectionRate +=
+      (38 * (steering - canopyDeflection) - 8 * deflectionRate) * dt;
+    canopyDeflection += deflectionRate * dt;
+    const bank = state.bank;
+    const drive = canopyDeflection / 0.33;
+    const support = state.recoveryLoad / (0.54 + state.recoveryLoad);
+    // Steady asymmetric drag produces a banked turn. In a loaded pull-out,
+    // shifting the suspended mass and deflecting a half-wing gives more moment.
+    const carve = drive * (0.56 + 0.36 * Math.cos(bank));
+    const shift = state.weight * (0.12 * Math.cos(bank) + 1.45 * support);
+    const moment = carve + shift + 1.55 * support * drive;
     const damping =
-      0.91 +
-      0.075 * Math.abs(bankVelocity) +
-      0.95 * (1 - Math.abs(differential)) ** 2 +
-      0.58 * commonBrake;
-    const torque =
-      restoring * (authority * differential - Math.sin(state.bank));
-    bankVelocity += (torque - damping * bankVelocity) * dt;
+      1.3 +
+      0.18 * Math.abs(bankVelocity) +
+      0.58 * brake +
+      0.62 * (1 - Math.min(1, Math.abs(drive) + Math.abs(state.weight))) ** 2;
+    bankVelocity +=
+      (5.8 * (moment - Math.sin(bank)) - damping * bankVelocity) * dt;
     state.bank += bankVelocity * dt;
+    state.bankRate = bankVelocity;
+    state.canopyBank =
+      state.bank + 0.25 * canopyDeflection + 0.19 * deflectionRate;
+  }
+
+  function trackManeuvers(headingChange) {
+    // An orbit in heading and a complete roll about the flight path are
+    // different windings. Returning through the same side cancels a wingover.
     const rotation = state.bank - lastUpright;
-    if (Math.abs(rotation) >= TAU - 0.12) {
+    const canopyAbovePilot =
+      Math.cos(state.canopyBank) * Math.cos(state.canopyPitch);
+    if (canopyAbovePilot < -0.2) invertedSide = Math.sign(rotation);
+    if (Math.abs(rotation) < 0.25) invertedSide = 0;
+    if (
+      Math.abs(rotation) >= TAU - 0.12 &&
+      Math.sign(rotation) === invertedSide &&
+      canopyAbovePilot > 0
+    ) {
+      invertedSide = 0;
       lastUpright += Math.sign(rotation) * TAU;
       state.rolls++;
+    }
+    const angle = Math.abs(principalAngle(state.bank));
+    const direction = Math.sign(headingChange);
+    const turning = angle > 0.56 && angle < Math.PI / 2 && state.climb < -3;
+    if (!turning || direction !== spiralDirection) {
+      spiralArc = 0;
+      state.inSpiral = false;
+      spiralDirection = direction;
+    }
+    if (turning) spiralArc += Math.abs(headingChange);
+    if (spiralArc >= Math.PI / 2) state.inSpiral = true;
+    if (spiralArc >= TAU) {
+      state.spirals++;
+      spiralArc -= TAU;
     }
   }
 
@@ -149,10 +198,28 @@ export function createFlight(world, seed = 1) {
     return null;
   }
 
+  // The aerodynamic reference travels on the integrated flight path. The
+  // harness describes a smaller arc around it. Resolve that radius in the
+  // plane perpendicular to velocity, so an inverted pilot actually moves
+  // over the reference and a banked pilot swings outside the turn.
+  const swingRadius = 1.75;
+  const harnessBefore = [0, 0, 0],
+    harnessAfter = [0, 0, 0];
+  function harnessOffset(out) {
+    const side = -swingRadius * Math.sin(state.bank);
+    const down = -swingRadius * Math.cos(state.bank);
+    const along = -down * Math.sin(state.pitch);
+    out[0] = side * Math.cos(state.heading) + along * Math.sin(state.heading);
+    out[1] = down * Math.cos(state.pitch);
+    out[2] = side * Math.sin(state.heading) - along * Math.cos(state.heading);
+  }
+
   function integrate(dt, input) {
     const x0 = state.x,
       y0 = state.y,
       z0 = state.z;
+    harnessOffset(harnessBefore);
+    const previousBankRate = bankVelocity;
     const right = unit(input.right),
       left = unit(input.left);
     state.left = approach(state.left, left, 6.5, dt);
@@ -160,7 +227,12 @@ export function createFlight(world, seed = 1) {
     state.trim = approach(state.trim, unit(input.trim ?? state.trim), 2.6, dt);
     const symmetric = Math.min(state.left, state.right);
     const differential = state.right - state.left;
-    updateBank(dt, differential, symmetric);
+    state.weight = approach(
+      state.weight,
+      clamp(input.weight || 0, -1, 1),
+      4,
+      dt,
+    );
 
     const referenceAngle = neutralAngle(state.trim);
     const speedRatio = state.speed / neutralSpeed(state.trim);
@@ -179,28 +251,60 @@ export function createFlight(world, seed = 1) {
         0.038 * Math.abs(differential) +
         0.14 * separation);
     const speedRate = -G * Math.sin(state.pitch) - drag;
-    const verticalLift = wingLift * Math.cos(state.bank);
+    state.loadFactor = wingLift / G;
+    // Excess normal acceleration during a pull-out, in units of g. Weighting
+    // by kinetic headroom keeps a trim-speed brake pulse from supplying energy.
+    const normalSurplus = Math.max(
+      0,
+      state.loadFactor * Math.cos(state.canopyBank) - Math.cos(state.pitch),
+    );
+    const reserve = unit((speedRatio - 0.97) / 0.2);
+    state.recoveryLoad = approach(
+      state.recoveryLoad,
+      Math.min(1.6, normalSurplus) * reserve,
+      normalSurplus * reserve > state.recoveryLoad ? 4.5 : 1.1,
+      dt,
+    );
+    updateBank(dt, differential, symmetric, pressure);
+    const verticalLift = wingLift * Math.cos(state.canopyBank);
     // Pitch damping represents the canopy–pilot recovery arc. Lift redirects
     // velocity and drag dissipates it; a flare never adds kinetic energy.
     const pitchRate =
       (verticalLift - G * Math.cos(state.pitch)) / state.speed -
       (0.27 - 0.09 * state.trim) * (state.pitch - referenceAngle);
     state.pitch = clamp(state.pitch + pitchRate * dt, -1.39, 0.76);
-    state.speed = clamp(state.speed + speedRate * dt, 6.5, 55);
-    state.bankRate = bankVelocity;
+    // Work used to build rotation also comes out of the translational
+    // energy budget. Aerodynamic damping dissipates it during rollout.
+    const angularWork =
+      1.35 * Math.max(0, bankVelocity ** 2 - previousBankRate ** 2);
+    const availableSpeed = Math.max(6.5, state.speed + speedRate * dt);
+    state.speed = Math.sqrt(
+      Math.max(6.5 ** 2, Math.min(55 ** 2, availableSpeed ** 2 - angularWork)),
+    );
     state.pitchRate = pitchRate;
-    // The loaded canopy leads the pendular harness slightly in roll. Chord
-    // attitude includes incidence, while pitch above is the velocity angle.
-    state.canopyBank = state.bank + clamp(0.095 * bankVelocity, -0.25, 0.25);
+    // Chord attitude includes incidence. Pitch above is the velocity angle.
     state.canopyPitch = state.pitch + 0.15 - 0.08 * state.trim + 0.14 * brake;
     const horizontalSpeed = state.speed * Math.cos(state.pitch);
-    state.heading +=
-      ((wingLift * Math.sin(state.bank)) / Math.max(7, horizontalSpeed)) * dt;
-    state.climb = state.speed * Math.sin(state.pitch);
-    state.x += Math.sin(state.heading) * horizontalSpeed * dt;
-    state.z -= Math.cos(state.heading) * horizontalSpeed * dt;
-    state.y += state.climb * dt;
-    const horizontalDistance = horizontalSpeed * dt;
+    const headingChange =
+      ((wingLift * Math.sin(state.canopyBank)) / Math.max(7, horizontalSpeed)) *
+      dt;
+    state.heading += headingChange;
+    harnessOffset(harnessAfter);
+    state.x +=
+      Math.sin(state.heading) * horizontalSpeed * dt +
+      harnessAfter[0] -
+      harnessBefore[0];
+    state.z +=
+      -Math.cos(state.heading) * horizontalSpeed * dt +
+      harnessAfter[2] -
+      harnessBefore[2];
+    state.y +=
+      state.speed * Math.sin(state.pitch) * dt +
+      harnessAfter[1] -
+      harnessBefore[1];
+    state.climb = (state.y - y0) / dt;
+    trackManeuvers(headingChange);
+    const horizontalDistance = Math.hypot(state.x - x0, state.z - z0);
     state.distance += horizontalDistance;
     state.time += dt;
     const ground = world.height(state.x, state.z);

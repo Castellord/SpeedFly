@@ -31,20 +31,88 @@ test("the trim polar changes speed and glide, and an energetic flare trades spee
   assert.ok(s.climb > 0 && s.speed < entrySpeed);
 });
 
-test("bank momentum responds to release throughout a roll", () => {
-  function attempt(reversalSeconds) {
-    const flight = createFlight(plane);
+const levelField = { height: () => 0, center: () => 0 };
+
+test("a held brake orbits in a descending spiral in either direction without inverting", () => {
+  for (const side of ["left", "right"]) {
+    const flight = createFlight(levelField);
     const s = flight.reset("free");
-    flyFor(flight, 1.15, () => ({ right: 1, trim: 0.5 }));
-    flyFor(flight, reversalSeconds, () => ({ left: 1, trim: 0.5 }));
-    flyFor(flight, 5, () => ({ trim: 0.5 }));
-    return s;
+    const cruise = s.speed,
+      initialSink = s.climb;
+    let highestBank = 0;
+    flyFor(flight, 16, () => {
+      highestBank = Math.max(highestBank, Math.abs(s.canopyBank));
+      return { [side]: 1 };
+    });
+    assert.equal(s.status, "flying");
+    assert.equal(s.spirals, 1);
+    assert.equal(s.inSpiral, true);
+    assert.equal(s.rolls, 0);
+    assert.ok(highestBank < Math.PI / 2);
+    assert.ok(Math.abs(s.heading) >= 2 * Math.PI);
+    assert.ok(s.speed > cruise && s.climb < initialSink - 3);
+    const beforeRelease = s.heading;
+    flyFor(flight, 2.5, () => ({}));
+    assert.ok(Math.abs(s.heading - beforeRelease) > 0.15);
+    assert.equal(s.inSpiral, false);
   }
-  assert.equal(attempt(1).rolls, 0);
-  const rotation = attempt(2.7);
-  assert.equal(rotation.rolls, 1);
-  assert.ok(Math.abs(rotation.bank + 2 * Math.PI) < 0.16);
-  assert.equal(rotation.status, "flying");
+});
+
+test("a roll requires inversion and upright recovery, and depends on the phase of the same inputs", () => {
+  for (const direction of [-1, 1]) {
+    const entry = direction < 0 ? "right" : "left";
+    const roll = direction < 0 ? "left" : "right";
+    function attempt(delay, activeSeconds = 1.6) {
+      const flight = createFlight(levelField);
+      const s = flight.reset("free");
+      let inverted = false;
+      let maxLoad = 0;
+      const run = (seconds, input) =>
+        flyFor(flight, seconds, () => {
+          if (Math.cos(s.canopyBank) * Math.cos(s.canopyPitch) < -0.25)
+            inverted = true;
+          maxLoad = Math.max(maxLoad, s.loadFactor);
+          return input;
+        });
+      run(5, { [entry]: 1 });
+      run(0.9, {});
+      run(0.55, { left: 1, right: 1 });
+      run(delay, {});
+      const exitHeading = s.heading;
+      const yAtEntry = s.y;
+      run(activeSeconds, { [roll]: 1, weight: direction });
+      run(5, {});
+      return {
+        s,
+        inverted,
+        maxLoad,
+        headingChange: s.heading - exitHeading,
+        heightLoss: yAtEntry - s.y,
+      };
+    }
+    const good = attempt(0),
+      late = attempt(5),
+      interrupted = attempt(0, 0.25);
+    assert.equal(good.s.status, "flying");
+    assert.equal(good.s.rolls, 1);
+    assert.equal(good.s.spirals, 0);
+    assert.ok(good.inverted && good.maxLoad > 1.4 && good.heightLoss > 0);
+    assert.ok(Math.abs(good.headingChange) < Math.PI / 2);
+    assert.ok(Math.abs(good.s.bank - direction * 2 * Math.PI) < 0.14);
+    assert.equal(late.s.rolls, 0);
+    assert.equal(interrupted.s.rolls, 0);
+  }
+});
+
+test("a hard reversal from trim flight produces a wingover and comes back on the same side", () => {
+  const f = createFlight(levelField),
+    s = f.reset("free");
+  flyFor(f, 1.15, () => ({ right: 1 }));
+  flyFor(f, 2.7, () => ({ left: 1 }));
+  flyFor(f, 5, () => ({}));
+  assert.equal(s.rolls, 0);
+  assert.equal(s.spirals, 0);
+  assert.ok(Math.abs(s.bank) < 0.12);
 });
 
 // Sample the visible line ahead, then apply keyboard-sized 200 ms pulses. This

@@ -455,6 +455,7 @@ export function createWing() {
     time = 0,
     bank = 0,
     canopyLead = 0,
+    weight = 0,
   ) {
     const l = clamp(left, 0, 1),
       r = clamp(right, 0, 1),
@@ -485,7 +486,7 @@ export function createWing() {
       h.toggle.position.copy(h.hand);
       h.toggle.position.y += 0.03;
     }
-    pilot.rotation.z = 0.032 * Math.sin(bank);
+    pilot.rotation.z = 0.032 * Math.sin(bank) - 0.22 * weight;
     for (const set of lineSets) {
       let index = 0;
       for (const pair of set.pairs)

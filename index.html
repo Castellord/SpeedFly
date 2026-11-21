@@ -116,12 +116,21 @@
         </button>
       </div>
       <div class="touch" hidden>
-        <button data-control="left">Левая</button>
+        <div>
+          <button data-control="left">Левая</button
+          ><button aria-label="Перенести вес влево" data-control="leanLeft">
+            Вес ←
+          </button>
+        </div>
         <div>
           <button id="touchTrimDown" aria-label="Закрыть триммеры">T−</button
           ><button id="touchTrimUp" aria-label="Открыть триммеры">T+</button>
         </div>
-        <button data-control="right">Правая</button>
+        <div>
+          <button aria-label="Перенести вес вправо" data-control="leanRight">
+            Вес →</button
+          ><button data-control="right">Правая</button>
+        </div>
       </div>
       <div class="loading" id="loading" role="status">Генерация рельефа…</div>
       <div class="toast" id="toast" role="status"></div>
@@ -159,6 +168,7 @@
     <footer>
       <span class="keyhint"><kbd>A</kbd><kbd>D</kbd> Клеванты</span
       ><span class="keyhint"><kbd>W</kbd><kbd>S</kbd> Триммеры</span
+      ><span class="keyhint"><kbd>Q</kbd><kbd>E</kbd> Вес</span
       ><span class="keyhint"><kbd>C</kbd> Камера</span
       ><span class="keyhint"><kbd>Esc</kbd> Пауза</span
       ><span class="ready" id="ready">Подготовка линии</span>

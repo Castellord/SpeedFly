@@ -70,6 +70,7 @@ function saveRun(status) {
       proximityDistance: Math.round(s.proximityDistance),
       total: flight.gates.length,
       rolls: s.rolls,
+      spirals: s.spirals,
       status,
       date: Date.now(),
     };
@@ -240,11 +241,16 @@ function updateHUD() {
       " м"
     : "Финиш";
   if (style === "free")
-    $("goal").textContent =
-      (s.distance / 1000).toFixed(2).replace(".", ",") + " км";
+    $("goal").textContent = s.inSpiral
+      ? "Нисходящая спираль"
+      : Math.cos(s.canopyBank) < -0.2
+        ? "Купол ниже пилота"
+        : s.recoveryLoad > 0.32
+          ? "Выход из снижения"
+          : (s.distance / 1000).toFixed(2).replace(".", ",") + " км";
   $("passed").textContent =
     style === "free"
-      ? "Бочки · " + s.rolls
+      ? "Витки · " + s.spirals + "　Бочки · " + s.rolls
       : s.passed + " / " + flight.gates.length + " пройдено";
   $("clock").textContent = clock(s.time);
   $("lowDistance").textContent =
@@ -282,6 +288,7 @@ function guide() {
         ["<kbd>A</kbd> / <kbd>←</kbd>", "Левая клеванта"],
         ["<kbd>D</kbd> / <kbd>→</kbd>", "Правая клеванта"],
         ["<kbd>A</kbd> + <kbd>D</kbd>", "Симметричное торможение"],
+        ["<kbd>Q</kbd> / <kbd>E</kbd>", "Перенос веса влево / вправо"],
         ["<kbd>W</kbd> / <kbd>S</kbd>", "Открыть / закрыть триммеры"],
         ["<kbd>C</kbd> / <kbd>Esc</kbd>", "Смена камеры / пауза"],
       ]
@@ -290,7 +297,7 @@ function guide() {
             '<div class="entry"><span>' + k + "</span><b>" + v + "</b></div>",
         )
         .join("") +
-      "<h3>Крен и энергия</h3><p>Открытые триммеры ускоряют крыло и делают траекторию круче. Одна зажатая клеванта затягивает спираль. При перекладке крыло и подвеска раскачиваются. В игре глубина крена и момент отпускания определяют, закончится ли перекладка разворотом или бочкой. Выход из разгона занимает время и высоту. Долгое удержание обеих клевант гасит скорость.</p><p>Манёвры рассчитаны для этой игры. На сенсорном экране доступны две клеванты и кнопки триммеров T− и T+.</p>",
+      "<h3>Крен и энергия</h3><p>В свободном полёте удерживай A или D, чтобы увидеть нисходящую спираль. Крыло остаётся сбоку и выше подвески, за полный оборот по курсу засчитывается виток. Для бочки важна фаза выхода. После разгона отпусти клеванту и дай крылу вернуться над подвеской. Пробел ненадолго увеличивает нагрузку при выравнивании. Пока горит «Выход из снижения», попробуй совместить перенос веса и клеванту в одну сторону. Ранняя или запоздалая попытка может закончиться качанием. Бочка засчитывается после инверсии и возвращения купола наверх.</p><p>Манёвры рассчитаны для этой игры. На сенсорном экране «Вес ←» и «Вес →» перемещают пилота в подвеске, «Левая» и «Правая» тянут клеванты.</p>",
     "help",
   );
 }
@@ -322,7 +329,9 @@ function journal() {
         : "") +
       "</small></span><span>" +
       (r.style === "free"
-        ? "Бочки · " + Number(r.rolls)
+        ? (Number.isFinite(r.spirals) ? "Витки · " + r.spirals + "　" : "") +
+          "Бочки · " +
+          Number(r.rolls)
         : Number(r.passed) + " / " + Number(r.total) + " ворот") +
       "</span></div>";
   }
@@ -365,6 +374,7 @@ function finish() {
           "Ниже 15 м над склоном",
           formatter.format(Math.round(s.proximityDistance)) + " м",
         ],
+        ["Витки спирали", s.spirals],
         ["Бочки", s.rolls],
       ]
         .map(
@@ -558,6 +568,9 @@ function frame(now) {
       flight.step(dt, {
         left: +(touches.has("left") || held(["KeyA", "ArrowLeft", "Space"])),
         right: +(touches.has("right") || held(["KeyD", "ArrowRight", "Space"])),
+        weight:
+          Number(touches.has("leanRight") || keys.has("KeyE")) -
+          Number(touches.has("leanLeft") || keys.has("KeyQ")),
         trim: targetTrim,
       });
       if (s.status !== "flying") finish();

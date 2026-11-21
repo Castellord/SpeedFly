@@ -107,6 +107,7 @@ export function createScene(canvas) {
       t,
       bank,
       preview ? 0 : (s.canopyBank ?? bank) - bank,
+      preview ? 0 : s.weight,
     );
     wing.group.visible = cameraMode !== 1 || preview;
     cockpit.group.visible = !wing.group.visible;
@@ -140,13 +141,20 @@ export function createScene(canvas) {
       target.y += portrait ? 0.3 : 1.65;
     } else if (cameraMode === 1) {
       eye.copy(origin).addScaledVector(forward, 0.28);
-      eye.y += 0.67;
+      // The helmet follows the harness, including when it is inverted.
+      const gazePitch = THREE.MathUtils.clamp(
+        s.pitch * 0.87 - 0.055,
+        -1.02,
+        0.38,
+      );
+      up.copy(forward).multiplyScalar(-Math.sin(gazePitch));
+      up.y = Math.cos(gazePitch);
+      up.multiplyScalar(Math.cos(bank)).addScaledVector(right, Math.sin(bank));
+      eye.addScaledVector(up, 0.67);
       // Eyes look forward through the turn. Flight-path angle determines how
       // much of the approaching surface is visible on a diving entry.
       target.copy(eye).addScaledVector(forward, 25);
-      target.y +=
-        25 *
-        Math.tan(THREE.MathUtils.clamp(s.pitch * 0.87 - 0.055, -1.02, 0.38));
+      target.y += 25 * Math.tan(gazePitch);
       target.addScaledVector(
         right,
         reducedMotion.matches
@@ -169,7 +177,8 @@ export function createScene(canvas) {
       );
     horizontal.copy(right);
     const tilt = preview ? 0 : cameraMode === 1 ? bank : Math.sin(bank) * 0.14;
-    up.set(0, Math.cos(tilt), 0).addScaledVector(horizontal, Math.sin(tilt));
+    if (preview || cameraMode !== 1)
+      up.set(0, Math.cos(tilt), 0).addScaledVector(horizontal, Math.sin(tilt));
     camera.up.copy(up);
     camera.lookAt(target);
     camera.getWorldDirection(horizontal);
