@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#151918" />
+    <meta
+      name="description"
+      content="Ridgeline — 3D-симулятор спидфлаинга. Выбирай свою линию и пилотируй крыло над процедурными альпийскими долинами."
+    />
+    <link rel="icon" href="./mark.svg" />
+    <title>Ridgeline — симулятор спидфлаинга</title>
+  </head>
+  <body data-mode="loading">
+    <header class="topbar">
+      <div class="brand" aria-label="Ridgeline Speedfly Simulator">
+        <svg class="brandmark" viewBox="0 0 54 38" aria-hidden="true">
+          <path
+            fill="currentColor"
+            d="M1 34 24 3h9L10 34zm17 0 16-22 19 22H40l-7-9-7 9z"
+          /></svg
+        ><b>RIDGELINE</b><span>SPEEDFLY<br />SIMULATOR</span>
+      </div>
+      <nav aria-label="Разделы">
+        <button id="flightTab" class="tab active">
+          <i data-i="wing"></i>Полёт</button
+        ><button id="logTab" class="tab"><i data-i="book"></i>Журнал</button>
+      </nav>
+      <div class="tools">
+        <button
+          id="sound"
+          class="iconbtn"
+          aria-label="Включить звук"
+          title="Включить звук"
+        >
+          <i data-i="mute"></i></button
+        ><button id="help" class="helpbtn" title="Управление (?)">
+          <i data-i="keyboard"></i><span>Управление</span></button
+        ><button
+          id="full"
+          class="iconbtn fullscreen"
+          aria-label="На весь экран"
+          title="На весь экран"
+        >
+          <i data-i="expand"></i>
+        </button>
+      </div>
+    </header>
+    <main id="stage" aria-label="Симулятор полёта">
+      <canvas
+        id="scene"
+        aria-label="Трёхмерная альпийская линия и пилот под крылом"
+      ></canvas>
+      <div class="shade"></div>
+      <div class="camera-tag">
+        <i data-i="camera"></i><span id="camLabel">Обзор линии</span>
+      </div>
+      <div class="compass" aria-label="Компас">
+        <canvas id="compass"></canvas><span class="needle"></span>
+      </div>
+      <aside class="mapbox" aria-label="Карта маршрута">
+        <div class="maphead">
+          <span><i data-i="map"></i>Карта линии</span><b>N ↑</b>
+        </div>
+        <canvas id="map"></canvas>
+        <div class="mapfoot">
+          <span class="dash"></span><span id="maplength">— км</span
+          ><span class="scale"></span>
+        </div>
+      </aside>
+      <section class="brief" id="brief">
+        <div class="line-id">
+          <span class="bars"></span><span id="lineNo">ЛИНИЯ 001</span><em></em
+          ><label class="line-mode"
+            ><select id="flightStyle" aria-label="Режим полёта">
+              <option value="line">Полёт по воротам</option>
+              <option value="free">Свободный полёт</option>
+            </select></label
+          >
+        </div>
+        <h1 id="routeName">Северный кулуар</h1>
+        <div class="routefacts">
+          <span><i data-i="route"></i><b id="length">—</b> км</span
+          ><span><i data-i="descent"></i><b id="drop">—</b> м перепада</span
+          ><span
+            ><i data-i="gate" id="courseIcon"></i><b id="gatesCount">—</b
+            ><span id="courseUnit">ворот</span></span
+          >
+        </div>
+        <div class="launchactions">
+          <button class="primary" id="launch">
+            <i data-i="play"></i>Начать полёт</button
+          ><button class="secondary" id="newLine">
+            <i data-i="shuffle"></i>Новая линия
+          </button>
+        </div>
+      </section>
+      <div id="flyingStatus" class="flight-status" hidden>
+        <small id="goalLabel">Следующие ворота</small
+        ><strong id="goal">—</strong>
+        <div>
+          <span id="clock">00:00</span> <span id="passed">0 пройдено</span>
+        </div>
+      </div>
+      <div class="flight-buttons" hidden>
+        <button class="overlaybtn" id="changeCam" aria-label="Сменить камеру">
+          <i data-i="camera"></i></button
+        ><button class="overlaybtn" id="pause" aria-label="Пауза">
+          <i data-i="pause"></i>
+        </button>
+      </div>
+      <div class="touch" hidden>
+        <button data-control="left">Левая</button>
+        <div>
+          <button id="touchTrimDown" aria-label="Закрыть триммеры">T−</button
+          ><button id="touchTrimUp" aria-label="Открыть триммеры">T+</button>
+        </div>
+        <button data-control="right">Правая</button>
+      </div>
+      <div class="loading" id="loading" role="status">Генерация рельефа…</div>
+      <div class="toast" id="toast" role="status"></div>
+    </main>
+    <section class="deck" aria-label="Полётные приборы">
+      <div class="deck-title">
+        <span class="deck-symbol"><i data-i="activity"></i></span
+        ><span>Телеметрия<br /><small>полёта</small></span>
+      </div>
+      <div class="stat">
+        <label>Скорость</label>
+        <div><b id="speed">—</b><small>км/ч</small></div>
+      </div>
+      <div class="stat">
+        <label>Над рельефом</label>
+        <div><b id="alt">—</b><small>м</small></div>
+      </div>
+      <div class="stat">
+        <label>Вариометр</label>
+        <div><b id="vario">—</b><small>м/с</small></div>
+      </div>
+      <div class="trimstat">
+        <label>Триммеры <strong id="trimVal">0%</strong></label>
+        <div class="segments" id="segments"></div>
+      </div>
+      <div class="brakestat">
+        <label>Клеванты</label>
+        <div class="brakes">
+          <span>Л</span><meter id="leftMeter" min="0" max="1" value="0"></meter
+          ><span>П</span
+          ><meter id="rightMeter" min="0" max="1" value="0"></meter>
+        </div>
+      </div>
+    </section>
+    <footer>
+      <span class="keyhint"><kbd>A</kbd><kbd>D</kbd> Клеванты</span
+      ><span class="keyhint"><kbd>W</kbd><kbd>S</kbd> Триммеры</span
+      ><span class="keyhint"><kbd>C</kbd> Камера</span
+      ><span class="keyhint"><kbd>Esc</kbd> Пауза</span
+      ><span class="ready" id="ready">Подготовка линии</span>
+    </footer>
+    <dialog id="panel">
+      <div class="dialog-top">
+        <div class="line-id"><span class="bars"></span>RIDGELINE</div>
+        <button id="closePanel" class="iconbtn" aria-label="Закрыть">
+          <i data-i="x"></i>
+        </button>
+      </div>
+      <div id="panelBody"></div>
+    </dialog>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
