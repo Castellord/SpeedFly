@@ -1043,3 +1043,11 @@ dialog .record small {
   color: #ffe2c3;
   font-variant-numeric: tabular-nums;
 }
+.flight-status .turn-readout:not([hidden]) {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 3px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}

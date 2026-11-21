@@ -3,6 +3,7 @@ const G = 9.81;
 const TAU = 2 * Math.PI;
 const slowBrakeRate = 1.15;
 const fastBrakeRate = 6;
+const physicsTick = 1 / 240;
 const canopySection = [
   [-4.2, 3.3],
   [0, 5.2],
@@ -58,6 +59,7 @@ const neutralAngle = (trim) => -Math.atan(glideSlope(trim));
 export function createFlight(world, seed = 1) {
   const gates = makeCourse(world, seed);
   const state = {};
+  let remainingTime = 0;
   let bankVelocity, lastUpright, canopyDeflection, deflectionRate;
   let spiralArc,
     spiralDirection,
@@ -67,6 +69,7 @@ export function createFlight(world, seed = 1) {
     settledSteering;
 
   function reset(style = "line") {
+    remainingTime = 0;
     const first = gates[0];
     const x = world.center(0);
     const ground = world.height(x, 0);
@@ -86,6 +89,12 @@ export function createFlight(world, seed = 1) {
       y,
       z: 0,
       heading,
+      canopyHeading: heading,
+      canopyYawRate: 0,
+      sideslip: 0,
+      headingRate: 0,
+      leftSeparation: 0,
+      rightSeparation: 0,
       bank: 0,
       bankRate: 0,
       weight: 0,
@@ -96,6 +105,9 @@ export function createFlight(world, seed = 1) {
       canopyBank: 0,
       pitch,
       pitchRate: 0,
+      pitchSwing: 0,
+      pitchSwingRate: 0,
+      flowSeparation: 0,
       canopyPitch: pitch + 0.15 - 0.08 * trim,
       speed,
       climb: speed * Math.sin(pitch),
@@ -127,10 +139,62 @@ export function createFlight(world, seed = 1) {
     return state;
   }
 
+  // The local airspeed at either half-span differs during a turn. An inside
+  // brake increases camber and drag locally; a faster outer half can produce
+  // more lift. Both effects matter on release and on a reversal.
+  function sectionSeparation(travel, speedRatio, previous, dt) {
+    const deep = unit((travel - 0.72) / 0.28);
+    const onset = 0.82 + 0.1 * previous;
+    const target = Math.max(
+      state.flowSeparation,
+      deep * unit((onset - speedRatio) / 0.15),
+    );
+    return approach(previous, target, target > previous ? 3.0 : 1.8, dt);
+  }
   function updateBank(dt, differential, brake, pressure) {
+    const yawAcrossSpan =
+      state.canopyYawRate * Math.cos(state.canopyBank) * Math.cos(state.pitch);
+    const spanSpeedRatio = clamp(
+      (2.1 * yawAcrossSpan) / state.speed,
+      -0.45,
+      0.45,
+    );
+    const leftPressure = (1 + spanSpeedRatio) ** 2;
+    const rightPressure = (1 - spanSpeedRatio) ** 2;
+    state.leftSeparation = sectionSeparation(
+      state.left,
+      Math.sqrt(leftPressure * pressure),
+      state.leftSeparation,
+      dt,
+    );
+    state.rightSeparation = sectionSeparation(
+      state.right,
+      Math.sqrt(rightPressure * pressure),
+      state.rightSeparation,
+      dt,
+    );
+    const leftDrag =
+      leftPressure *
+      (0.13 +
+        0.2 * state.left +
+        0.2 * state.left ** 2 +
+        0.3 * state.leftSeparation);
+    const rightDrag =
+      rightPressure *
+      (0.13 +
+        0.2 * state.right +
+        0.2 * state.right ** 2 +
+        0.3 * state.rightSeparation);
+    const dragImbalance = rightDrag - leftDrag;
+    const liftImbalance =
+      leftPressure * (1 + 0.13 * state.left - 0.7 * state.leftSeparation) -
+      rightPressure * (1 + 0.13 * state.right - 0.7 * state.rightSeparation);
     // The canopy responds first. The suspended mass follows as the lines
     // transmit the lateral component of the aerodynamic force.
-    const steering = differential * (0.19 + 0.14 * Math.min(pressure, 2));
+    const steering =
+      (0.88 * differential + 0.3 * dragImbalance + 0.2 * liftImbalance) *
+      (0.19 + 0.14 * Math.min(pressure, 2)) *
+      Math.min(1, pressure / 0.75);
     deflectionRate +=
       (38 * (steering - canopyDeflection) - 8 * deflectionRate) * dt;
     canopyDeflection += deflectionRate * dt;
@@ -170,6 +234,7 @@ export function createFlight(world, seed = 1) {
     state.bankRate = bankVelocity;
     state.canopyBank =
       state.bank + 0.25 * canopyDeflection + 0.19 * deflectionRate;
+    return dragImbalance;
   }
 
   function trackManeuvers(headingChange) {
@@ -210,8 +275,8 @@ export function createFlight(world, seed = 1) {
       rollCos = Math.cos(state.canopyBank);
     const pitchSin = Math.sin(state.canopyPitch),
       pitchCos = Math.cos(state.canopyPitch);
-    const headingSin = Math.sin(state.heading),
-      headingCos = Math.cos(state.heading);
+    const headingSin = Math.sin(state.canopyHeading),
+      headingCos = Math.cos(state.canopyHeading);
     for (const [span, height] of canopySection) {
       const lateral = span * rollCos + height * rollSin;
       const vertical = height * rollCos - span * rollSin;
@@ -249,6 +314,10 @@ export function createFlight(world, seed = 1) {
     );
   }
 
+  function rapidTravel(delta, dt) {
+    return delta * (delta / (fastBrakeRate * dt)) ** 2;
+  }
+
   function integrate(dt, input) {
     const x0 = state.x,
       y0 = state.y,
@@ -275,9 +344,12 @@ export function createFlight(world, seed = 1) {
     // A moving hand loads one half of the canopy before the harness follows.
     // A lateral weight transfer can also initiate rotation in an established
     // carve, even with the inside brake already at the end of its travel.
+    const rightTravel = Math.max(0, state.right - oldRight);
+    const leftTravel = Math.max(0, state.left - oldLeft);
+    // Rate-dependent loading grows continuously with hand velocity. A hand
+    // cannot add tension while the released side pays out its brake line.
     const quickStroke =
-      Math.max(0, state.right - oldRight - slowBrakeRate * dt) -
-      Math.max(0, state.left - oldLeft - slowBrakeRate * dt);
+      0.81 * (rapidTravel(rightTravel, dt) - rapidTravel(leftTravel, dt));
     const weightStep = state.weight - oldWeight;
     const insideTransfer =
       weightStep * Math.max(0, differential * Math.sign(weightStep));
@@ -309,10 +381,44 @@ export function createFlight(world, seed = 1) {
     const speedRatio = state.speed / neutralSpeed(state.trim);
     const pressure = speedRatio ** 2;
     const brake = symmetric + 0.18 * Math.abs(differential);
-    // Deep, sustained brake loses lift only once the wing has shed airspeed.
-    const separation =
-      unit((symmetric - 0.68) / 0.32) * unit((0.87 - speedRatio) / 0.21);
-    const liftCoefficient = 1 + 1.04 * brake - 1.08 * separation;
+    // Extra profile drag slows the canopy ahead of the suspended mass.
+    // Project the resulting swing into the chord attitude and lift slope.
+    const brakeDrag =
+      pressure *
+      (-Math.sin(referenceAngle) * 0.8 * brake +
+        0.094 * symmetric ** 2 +
+        0.038 * Math.abs(differential));
+    const swingTarget = 0.28 * Math.atan(brakeDrag);
+    state.pitchSwingRate +=
+      (8 * (swingTarget - state.pitchSwing) - 2.8 * state.pitchSwingRate) * dt;
+    state.pitchSwing += state.pitchSwingRate * dt;
+
+    // Attached flow persists at the start of a flare. At deep brake, loss
+    // of airspeed and increased incidence bring on separation. Reattachment
+    // takes time after the controls are released.
+    const deepBrake = unit((symmetric - 0.66) / 0.34);
+    const stallRatio =
+      0.85 + 0.12 * state.flowSeparation + 0.28 * state.pitchSwing;
+    const separatedTarget = deepBrake * unit((stallRatio - speedRatio) / 0.15);
+    state.flowSeparation = approach(
+      state.flowSeparation,
+      separatedTarget,
+      separatedTarget > state.flowSeparation ? 2.8 : 1.7,
+      dt,
+    );
+    const separation = state.flowSeparation;
+    // A stalled inside half also changes total force on the system. The
+    // symmetric component is already included in the common flow state.
+    const asymmetricLoss =
+      0.5 * Math.abs(state.leftSeparation - state.rightSeparation);
+    const liftCoefficient = Math.max(
+      0.18,
+      1 +
+        1.04 * brake +
+        1.35 * state.pitchSwing -
+        1.55 * separation -
+        0.7 * asymmetricLoss,
+    );
     const wingLift = G * Math.cos(referenceAngle) * pressure * liftCoefficient;
     const drag =
       G *
@@ -320,7 +426,8 @@ export function createFlight(world, seed = 1) {
       (-Math.sin(referenceAngle) * (1 + 0.8 * brake) +
         0.094 * symmetric ** 2 +
         0.038 * Math.abs(differential) +
-        0.14 * separation);
+        0.72 * separation +
+        0.3 * asymmetricLoss);
     // A rolling half-wing sweeps across the airflow. Its induced drag is
     // greatest at high angular speed and low dynamic pressure.
     const rollDrag =
@@ -341,7 +448,7 @@ export function createFlight(world, seed = 1) {
       normalSurplus * reserve > state.recoveryLoad ? 4.5 : 1.1,
       dt,
     );
-    updateBank(dt, differential, symmetric, pressure);
+    const dragImbalance = updateBank(dt, differential, symmetric, pressure);
     const verticalLift = wingLift * Math.cos(state.canopyBank);
     // Pitch damping represents the canopy–pilot recovery arc. Lift redirects
     // velocity and drag dissipates it; a flare never adds kinetic energy.
@@ -359,12 +466,26 @@ export function createFlight(world, seed = 1) {
     );
     state.pitchRate = pitchRate;
     // Chord attitude includes incidence. Pitch above is the velocity angle.
-    state.canopyPitch = state.pitch + 0.15 - 0.08 * state.trim + 0.14 * brake;
+    state.canopyPitch =
+      state.pitch + 0.15 - 0.08 * state.trim + 0.1 * brake + state.pitchSwing;
     const horizontalSpeed = state.speed * Math.cos(state.pitch);
-    const headingChange =
-      ((wingLift * Math.sin(state.canopyBank)) / Math.max(7, horizontalSpeed)) *
-      dt;
+    // The velocity turns under lateral lift. The nose also yaws under the
+    // drag imbalance; relative airflow opposes the resulting sideslip. Bank
+    // continues to change the track after a brake is released or reversed.
+    const coordinatedRate =
+      (wingLift * Math.sin(state.canopyBank)) / Math.max(7, horizontalSpeed);
+    const sideforceRate = 0.48 * pressure * Math.sin(state.sideslip);
+    state.headingRate = coordinatedRate + sideforceRate;
+    const weathercock = 7.8 * pressure * Math.sin(state.sideslip);
+    const yawDamping =
+      4.2 * Math.sqrt(pressure) * (coordinatedRate - state.canopyYawRate);
+    const brakeYaw =
+      2.8 * pressure * dragImbalance * Math.cos(state.canopyBank);
+    state.canopyYawRate += (brakeYaw + yawDamping - weathercock) * dt;
+    state.sideslip += (state.canopyYawRate - state.headingRate) * dt;
+    const headingChange = state.headingRate * dt;
     state.heading += headingChange;
+    state.canopyHeading = state.heading + state.sideslip;
     harnessOffset(harnessAfter);
     state.x +=
       Math.sin(state.heading) * horizontalSpeed * dt +
@@ -429,10 +550,11 @@ export function createFlight(world, seed = 1) {
 
   function step(dt, input = {}) {
     if (!(dt > 0) || !Number.isFinite(dt)) return state;
-    const elapsed = Math.min(dt, 0.25);
-    const steps = Math.ceil(elapsed * 90);
+    remainingTime += Math.min(dt, 0.25);
+    const steps = Math.floor((remainingTime + 1e-12) / physicsTick);
+    remainingTime = Math.max(0, remainingTime - steps * physicsTick);
     for (let i = 0; i < steps && state.status === "flying"; i++)
-      integrate(elapsed / steps, input);
+      integrate(physicsTick, input);
     return state;
   }
 

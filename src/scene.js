@@ -88,7 +88,7 @@ export function createScene(canvas) {
       renderer.setPixelRatio(ratio);
       framerate = 0.023;
     }
-    const dir = s.heading,
+    const dir = preview ? s.heading : (s.canopyHeading ?? s.heading),
       bank = preview ? -0.16 + 0.018 * Math.sin(t * 0.28) : s.bank;
     origin.set(s.x, s.y + (preview ? 0.16 * Math.sin(t * 0.65) : 0), s.z);
     forward.set(Math.sin(dir), 0, -Math.cos(dir));
@@ -143,7 +143,7 @@ export function createScene(canvas) {
       eye.copy(origin).addScaledVector(forward, 0.28);
       // The helmet follows the harness, including when it is inverted.
       const gazePitch = THREE.MathUtils.clamp(
-        s.pitch * 0.87 - 0.055,
+        s.pitch * 0.87 + s.pitchSwing * 0.55 - 0.055,
         -1.02,
         0.38,
       );
