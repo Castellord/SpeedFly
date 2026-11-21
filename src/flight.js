@@ -58,18 +58,14 @@ const neutralAngle = (trim) => -Math.atan(glideSlope(trim));
 
 export function createFlight(world, seed = 1) {
   const gates = makeCourse(world, seed);
-  const state = {};
+  let state = {};
+  const forecastState = {};
   let remainingTime = 0;
-  let bankVelocity, lastUpright, canopyDeflection, deflectionRate;
-  let spiralArc,
-    spiralDirection,
-    invertedSide,
-    rollImpulse,
-    pullEffort,
-    settledSteering;
+  let lastInput = {};
 
   function reset(style = "line") {
     remainingTime = 0;
+    lastInput = {};
     const first = gates[0];
     const x = world.center(0);
     const ground = world.height(x, 0);
@@ -126,16 +122,16 @@ export function createFlight(world, seed = 1) {
       trim,
       rolls: 0,
     });
-    bankVelocity = 0;
-    lastUpright = 0;
-    invertedSide = 0;
-    rollImpulse = 0;
-    pullEffort = 0;
-    settledSteering = 0;
-    canopyDeflection = 0;
-    deflectionRate = 0;
-    spiralArc = 0;
-    spiralDirection = 0;
+    state.bankVelocity = 0;
+    state.lastUpright = 0;
+    state.invertedSide = 0;
+    state.rollImpulse = 0;
+    state.pullEffort = 0;
+    state.settledSteering = 0;
+    state.canopyDeflection = 0;
+    state.deflectionRate = 0;
+    state.spiralArc = 0;
+    state.spiralDirection = 0;
     return state;
   }
 
@@ -195,11 +191,12 @@ export function createFlight(world, seed = 1) {
       (0.88 * differential + 0.3 * dragImbalance + 0.2 * liftImbalance) *
       (0.19 + 0.14 * Math.min(pressure, 2)) *
       Math.min(1, pressure / 0.75);
-    deflectionRate +=
-      (38 * (steering - canopyDeflection) - 8 * deflectionRate) * dt;
-    canopyDeflection += deflectionRate * dt;
+    state.deflectionRate +=
+      (38 * (steering - state.canopyDeflection) - 8 * state.deflectionRate) *
+      dt;
+    state.canopyDeflection += state.deflectionRate * dt;
     const bank = state.bank;
-    const drive = canopyDeflection / 0.33;
+    const drive = state.canopyDeflection / 0.33;
     const support = state.recoveryLoad / (0.54 + state.recoveryLoad);
     // Steady asymmetric drag produces a banked turn. In a loaded pull-out,
     // shifting the suspended mass and deflecting a half-wing gives more moment.
@@ -212,61 +209,61 @@ export function createFlight(world, seed = 1) {
     const changing =
       Math.sign(command) *
       clamp(
-        Math.sign(command) * (command - settledSteering),
+        Math.sign(command) * (command - state.settledSteering),
         0,
         Math.abs(command),
       );
-    settledSteering = approach(settledSteering, command, 0.85, dt);
+    state.settledSteering = approach(state.settledSteering, command, 0.85, dt);
     const transient =
-      rollImpulse *
+      state.rollImpulse *
       Math.abs(differential) *
       Math.min(1, pressure / 0.7) *
       (0.75 + 0.25 * Math.min(pressure, 2));
     const moment = carve + shift + 2.65 * support * changing + transient;
     const damping =
       1.3 +
-      0.18 * Math.abs(bankVelocity) +
+      0.18 * Math.abs(state.bankVelocity) +
       0.58 * brake +
       0.62 * (1 - Math.min(1, Math.abs(drive) + Math.abs(state.weight))) ** 2;
-    bankVelocity +=
-      (5.8 * (moment - Math.sin(bank)) - damping * bankVelocity) * dt;
-    state.bank += bankVelocity * dt;
-    state.bankRate = bankVelocity;
+    state.bankVelocity +=
+      (5.8 * (moment - Math.sin(bank)) - damping * state.bankVelocity) * dt;
+    state.bank += state.bankVelocity * dt;
+    state.bankRate = state.bankVelocity;
     state.canopyBank =
-      state.bank + 0.25 * canopyDeflection + 0.19 * deflectionRate;
+      state.bank + 0.25 * state.canopyDeflection + 0.19 * state.deflectionRate;
     return dragImbalance;
   }
 
   function trackManeuvers(headingChange) {
     // An orbit in heading and a complete roll about the flight path are
     // different windings. Returning through the same side cancels a wingover.
-    const rotation = state.bank - lastUpright;
+    const rotation = state.bank - state.lastUpright;
     const canopyAbovePilot =
       Math.cos(state.canopyBank) * Math.cos(state.canopyPitch);
-    if (canopyAbovePilot < -0.2) invertedSide = Math.sign(rotation);
-    if (Math.abs(rotation) < 0.25) invertedSide = 0;
+    if (canopyAbovePilot < -0.2) state.invertedSide = Math.sign(rotation);
+    if (Math.abs(rotation) < 0.25) state.invertedSide = 0;
     if (
       Math.abs(rotation) >= TAU - 0.12 &&
-      Math.sign(rotation) === invertedSide &&
+      Math.sign(rotation) === state.invertedSide &&
       canopyAbovePilot > 0
     ) {
-      invertedSide = 0;
-      lastUpright += Math.sign(rotation) * TAU;
+      state.invertedSide = 0;
+      state.lastUpright += Math.sign(rotation) * TAU;
       state.rolls++;
     }
     const angle = Math.abs(principalAngle(state.bank));
     const direction = Math.sign(headingChange);
     const turning = angle > 0.56 && angle < Math.PI / 2 && state.climb < -3;
-    if (!turning || direction !== spiralDirection) {
-      spiralArc = 0;
+    if (!turning || direction !== state.spiralDirection) {
+      state.spiralArc = 0;
       state.inSpiral = false;
-      spiralDirection = direction;
+      state.spiralDirection = direction;
     }
-    if (turning) spiralArc += Math.abs(headingChange);
-    if (spiralArc >= Math.PI / 2) state.inSpiral = true;
-    if (spiralArc >= TAU) {
+    if (turning) state.spiralArc += Math.abs(headingChange);
+    if (state.spiralArc >= Math.PI / 2) state.inSpiral = true;
+    if (state.spiralArc >= TAU) {
       state.spirals++;
-      spiralArc -= TAU;
+      state.spiralArc -= TAU;
     }
   }
 
@@ -323,7 +320,7 @@ export function createFlight(world, seed = 1) {
       y0 = state.y,
       z0 = state.z;
     harnessOffset(harnessBefore);
-    const previousBankRate = bankVelocity;
+    const previousBankRate = state.bankVelocity;
     const right = unit(input.right),
       left = unit(input.left);
     const oldLeft = state.left,
@@ -358,18 +355,23 @@ export function createFlight(world, seed = 1) {
     // the loaded side contributes. Holding a key cannot regenerate the pulse.
     const effortTarget =
       (input.fastRight ? right : 0) - (input.fastLeft ? left : 0);
-    const oldEffort = pullEffort;
-    pullEffort = approach(oldEffort, effortTarget, effortTarget ? 26 : 2, dt);
+    const oldEffort = state.pullEffort;
+    state.pullEffort = approach(
+      oldEffort,
+      effortTarget,
+      effortTarget ? 26 : 2,
+      dt,
+    );
     const effortRise =
       Math.sign(effortTarget) *
-      Math.max(0, Math.sign(effortTarget) * (pullEffort - oldEffort));
+      Math.max(0, Math.sign(effortTarget) * (state.pullEffort - oldEffort));
     const loadedTug =
       effortRise *
       Math.max(0, Math.sign(effortTarget) * (oldRight - oldLeft)) ** 3;
     const asymmetricStroke = quickStroke * Math.abs(right - left);
     const handMoment = asymmetricStroke + loadedTug;
-    rollImpulse = clamp(
-      rollImpulse * Math.exp(-1.3 * dt) +
+    state.rollImpulse = clamp(
+      state.rollImpulse * Math.exp(-1.3 * dt) +
         handMoment *
           (4.35 + 0.5 * Math.max(0, state.weight * Math.sign(handMoment))) +
         2.35 * insideTransfer,
@@ -431,7 +433,7 @@ export function createFlight(world, seed = 1) {
     // A rolling half-wing sweeps across the airflow. Its induced drag is
     // greatest at high angular speed and low dynamic pressure.
     const rollDrag =
-      (0.019 * (3.3 * bankVelocity) ** 2) /
+      (0.019 * (3.3 * state.bankVelocity) ** 2) /
       (Math.max(0.55, pressure) * (1 + 10 * state.recoveryLoad));
     const speedRate = -G * Math.sin(state.pitch) - drag - rollDrag;
     state.loadFactor = wingLift / G;
@@ -459,7 +461,7 @@ export function createFlight(world, seed = 1) {
     // Work used to build rotation also comes out of the translational
     // energy budget. Aerodynamic damping dissipates it during rollout.
     const angularWork =
-      1.35 * Math.max(0, bankVelocity ** 2 - previousBankRate ** 2);
+      1.35 * Math.max(0, state.bankVelocity ** 2 - previousBankRate ** 2);
     const availableSpeed = Math.max(6.5, state.speed + speedRate * dt);
     state.speed = Math.sqrt(
       Math.max(6.5 ** 2, Math.min(55 ** 2, availableSpeed ** 2 - angularWork)),
@@ -550,6 +552,7 @@ export function createFlight(world, seed = 1) {
 
   function step(dt, input = {}) {
     if (!(dt > 0) || !Number.isFinite(dt)) return state;
+    lastInput = input;
     remainingTime += Math.min(dt, 0.25);
     const steps = Math.floor((remainingTime + 1e-12) / physicsTick);
     remainingTime = Math.max(0, remainingTime - steps * physicsTick);
@@ -558,6 +561,23 @@ export function createFlight(world, seed = 1) {
     return state;
   }
 
+  // Run the same aerodynamic and collision code on a scratch state. A
+  // coarser integration step keeps the optional sight inexpensive.
+  function predictGlide(writePoint) {
+    const live = state;
+    state = Object.assign(forecastState, live);
+    try {
+      writePoint(state);
+      for (let sample = 0; sample < 40 && state.status === "flying"; sample++) {
+        for (let tick = 0; tick < 8 && state.status === "flying"; tick++)
+          integrate(1 / 40, lastInput);
+        writePoint(state);
+      }
+    } finally {
+      state = live;
+    }
+  }
+
   reset();
-  return { state, gates, step, reset };
+  return { state, gates, step, reset, predictGlide };
 }

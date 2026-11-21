@@ -314,3 +314,39 @@ test("proximity distance clips both directions of the 15 metre crossing", () => 
     assert.equal(flight.reset("free").proximityDistance, 0);
   }
 });
+
+test("glide forecast preserves live dynamics and follows held brakes and trim", () => {
+  const ground = { center: () => 0, height: () => 0 };
+  const wing = createFlight(ground, 8),
+    twin = createFlight(ground, 8);
+  wing.reset("free");
+  twin.reset("free");
+  const command = { left: 0.38, weight: -0.16, trim: 0.61 };
+  for (let i = 0; i < 45; i++) {
+    wing.step(1 / 60, command);
+    twin.step(1 / 60, command);
+  }
+  const before = { ...wing.state },
+    points = [];
+  wing.predictGlide((s) => points.push({ x: s.x, y: s.y, z: s.z }));
+  assert.deepEqual(wing.state, before);
+  for (let i = 0; i < 120; i++) {
+    wing.step(1 / 60, command);
+    twin.step(1 / 60, command);
+  }
+  assert.deepEqual(wing.state, twin.state);
+  const p = points[10];
+  assert.ok(
+    Math.hypot(p.x - wing.state.x, p.y - wing.state.y, p.z - wing.state.z) < 1,
+  );
+  const low = createFlight(
+    { center: () => 0, height: (_x, z) => (z < -26 ? 50 : 0) },
+    2,
+  );
+  let end;
+  low.predictGlide((s) => {
+    end = { status: s.status, z: s.z };
+  });
+  assert.equal(end.status, "crashed");
+  assert.ok(end.z > -30);
+});

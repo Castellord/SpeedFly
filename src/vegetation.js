@@ -420,6 +420,7 @@ function shadowDisc() {
 export function createVegetation({
   scene,
   seed = 1847,
+  addPass,
   height,
   center,
   forest,
@@ -558,6 +559,7 @@ export function createVegetation({
         1,
       );
     }
+    if (tree && h > 3) addPass?.(x, y, z, radius * 0.75, h * 0.9);
     counts[id]++;
     const key = cellKey(Math.floor(x / sizeOfCell), Math.floor(z / sizeOfCell));
     if (!cells.has(key)) cells.set(key, []);
@@ -653,6 +655,34 @@ export function createVegetation({
       dz,
       0.8 + rng() * 0.31,
     );
+  }
+  // Isolated stands lean into the shoulders with open glades between them.
+  // Preserve space for the wing even where the gate centre wanders sideways.
+  for (let z = -26; z > -3260; z -= 63 + rng() * 92) {
+    const side = rng() < 0.5 ? -1 : 1;
+    const count = 2 + Math.floor(rng() * 4);
+    for (let i = 0; i < count; i++) {
+      const pz = z - i * (4 + rng() * 6),
+        h = 4.5 + rng() * 8;
+      const type = rng() < 0.68 ? 0 : 1;
+      const x =
+        center(pz) +
+        side * (10.5 + h * species[type].crown + rng() * 5 + i * 1.4);
+      const y = height(x, pz),
+        [dx, dz, ny] = slope(x, pz);
+      if (ny < 0.73 || y > 2010 || Math.abs(x - stream(pz)) < 6) continue;
+      place(
+        type * 2 + (rng() < 0.5 ? 0 : 1),
+        x,
+        y - 0.07,
+        pz,
+        h,
+        0.92,
+        dx,
+        dz,
+        0.87 + rng() * 0.18,
+      );
+    }
   }
   const batch = (geo, mat, capacity, colored = true) => {
     const instance = new THREE.InstancedMesh(geo, mat, Math.max(1, capacity));

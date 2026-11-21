@@ -7,6 +7,9 @@ export function createSound() {
     edgeGain,
     windFilter,
     edgeFilter,
+    passFilter,
+    passGain,
+    passPan,
     active = true;
   try {
     active = localStorage.getItem("ridgeline.wind") !== "off";
@@ -44,6 +47,17 @@ export function createSound() {
     edgeGain = context.createGain();
     source.connect(windFilter).connect(windGain).connect(master);
     source.connect(edgeFilter).connect(edgeGain).connect(master);
+    passFilter = context.createBiquadFilter();
+    passFilter.type = "bandpass";
+    passFilter.Q.value = 0.72;
+    passGain = context.createGain();
+    passGain.gain.value = 0;
+    passPan = context.createStereoPanner();
+    source
+      .connect(passFilter)
+      .connect(passGain)
+      .connect(passPan)
+      .connect(master);
     source.start();
   }
   async function resume() {
@@ -67,12 +81,23 @@ export function createSound() {
         master.gain.setTargetAtTime(0, context.currentTime, 0.04);
       return active;
     },
-    update(state, flying) {
+    update(state, flying, pass) {
       if (!context) return;
       const t = context.currentTime,
         speed = Math.min(1.6, state.speed / 29);
       const near = Math.exp(-Math.max(0, state.agl) / 12);
       master.gain.setTargetAtTime(active && flying ? 0.5 : 0, t, 0.12);
+      passGain.gain.setTargetAtTime(
+        (pass?.strength || 0) * speed * 0.85,
+        t,
+        0.055,
+      );
+      passPan.pan.setTargetAtTime(pass?.pan || 0, t, 0.065);
+      passFilter.frequency.setTargetAtTime(
+        620 + speed * 440 + (pass?.approach || 0) * 440,
+        t,
+        0.07,
+      );
       windGain.gain.setTargetAtTime(0.04 + 0.58 * speed ** 2, t, 0.15);
       edgeGain.gain.setTargetAtTime(
         0.02 + speed ** 3 * 0.18 + near * 0.045,

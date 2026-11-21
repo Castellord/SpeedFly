@@ -1,3 +1,5 @@
+import { createMotion } from "./motion.js";
+import { createGlideGuide } from "./glide-guide.js";
 import { createAirEffects } from "./air-effects.js";
 import { flightTexture, texturesReady } from "./textures.js";
 import * as THREE from "three";
@@ -30,6 +32,8 @@ export function createScene(canvas) {
   const cockpit = createCockpit();
   camera.add(cockpit.group);
   scene.add(camera);
+  const renderMotion = createMotion(renderer);
+  const guide = createGlideGuide(scene);
   const courseMarkers = createCourseMarkers(scene);
   const updateAir = createAirEffects(scene);
   const updateShadow = createWingShadow(scene, sun.position);
@@ -69,7 +73,7 @@ export function createScene(canvas) {
       ready: Promise.all([rocks.ready, texturesReady()]),
     };
   }
-  function draw({ mode, cameraMode, t, dt, snap }) {
+  function draw({ mode, cameraMode, t, dt, snap, showGlide = false }) {
     const s = flight.state,
       preview = mode === "preview";
     const w = canvas.clientWidth,
@@ -115,9 +119,14 @@ export function createScene(canvas) {
     wing.group.visible = cameraMode !== 1 || preview;
     cockpit.group.visible = !wing.group.visible;
     const speedFraction = THREE.MathUtils.smoothstep(s.speed, 14, 36);
+    const rush =
+      (1 - THREE.MathUtils.smoothstep(s.agl, 3, 38)) *
+      THREE.MathUtils.smoothstep(s.speed * Math.cos(s.pitch), 9, 27);
     const targetFov = preview ? 55 : cameraMode === 1 ? 77 : 65;
     const widen =
-      preview || reducedMotion.matches ? 0 : 8 * (speedFraction - 0.4);
+      preview || reducedMotion.matches
+        ? 0
+        : 8 * (speedFraction - 0.4) + 3.4 * rush;
     const fov = snap
       ? targetFov + widen
       : THREE.MathUtils.damp(camera.fov, targetFov + widen, 3.5, dt);
@@ -146,7 +155,10 @@ export function createScene(canvas) {
       eye.copy(origin).addScaledVector(forward, 0.28);
       // The helmet follows the harness, including when it is inverted.
       const gazePitch = THREE.MathUtils.clamp(
-        s.pitch * 0.87 + s.pitchSwing * 0.55 - 0.055,
+        s.pitch * 0.87 +
+          s.pitchSwing * 0.55 -
+          0.055 -
+          (reducedMotion.matches ? 0 : 0.078 * rush),
         -1.02,
         0.38,
       );
@@ -198,7 +210,14 @@ export function createScene(canvas) {
       renderer.domElement.height,
       !reducedMotion.matches && !preview,
     );
-    renderer.render(scene, camera);
+    guide(flight, showGlide && (mode === "flying" || mode === "paused"), snap);
+    renderMotion(
+      scene,
+      camera,
+      !reducedMotion.matches && mode === "flying" ? rush : 0,
+      dt,
+      snap,
+    );
   }
   async function warmup() {
     await renderer.compileAsync(scene, camera);

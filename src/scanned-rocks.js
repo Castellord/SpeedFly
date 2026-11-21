@@ -152,12 +152,34 @@ export function createScannedRocks(scene, world, seed) {
   }
   add(world.center(-448) + 15, -448, 17, 0.65, 0.52, 0);
   add(world.center(-612) - 17, -612, 12, 0.63, 0.18, 1);
+  for (let z = -39; z > -3250; z -= 75 + random() * 112) {
+    const side = random() < 0.5 ? -1 : 1;
+    const length = 7 + random() * 5;
+    add(
+      world.center(z) + side * (9 + 0.65 * length + random() * 2),
+      z,
+      length,
+      1.1 + random() * 0.44,
+      random() * 6.28,
+      0,
+    );
+  }
   scene.add(root);
   const ready = loadScans().then((models) => {
     if (disposed) return;
     assets = models;
     const grouped = new Map();
     for (const rock of placements) {
+      if (rock.length > 2.5)
+        world.addPass(
+          rock.x,
+          rock.base,
+          rock.z,
+          rock.length * 0.43,
+          rock.length *
+            rock.heightScale *
+            models[rock.model].geometry.boundingBox.max.y,
+        );
       const tile = Math.floor(rock.z / 75),
         key = tile * 2 + rock.model;
       if (!grouped.has(key)) grouped.set(key, []);

@@ -30,6 +30,22 @@ const lineNames = [
 ];
 const firstSeed = 1847;
 let style = "line";
+let showGlide = true;
+try {
+  showGlide = localStorage.getItem("ridgeline.glide") !== "off";
+} catch {}
+function glideButton() {
+  $("glide").setAttribute("aria-pressed", String(showGlide));
+}
+function toggleGlide() {
+  showGlide = !showGlide;
+  glideButton();
+  try {
+    localStorage.setItem("ridgeline.glide", showGlide ? "on" : "off");
+  } catch {}
+}
+glideButton();
+$("glide").onclick = toggleGlide;
 let seed = firstSeed,
   number = 1,
   title = lineNames[0],
@@ -323,6 +339,10 @@ function guide() {
         ["<kbd>Пробел</kbd>", "Обе клеванты одновременно"],
         ["<kbd>Q</kbd> / <kbd>E</kbd>", "Перенос веса влево / вправо"],
         ["<kbd>↑</kbd> / <kbd>↓</kbd>", "Открыть / закрыть триммеры"],
+        [
+          "<kbd>H</kbd>",
+          "Прогноз глайда на 8 с. Зелёный — свободный путь, янтарный — низко или мимо ворот, красный — касание",
+        ],
         ["<kbd>C</kbd> / <kbd>Esc</kbd>", "Смена камеры / пауза"],
       ]
         .map(
@@ -538,6 +558,7 @@ window.addEventListener("keydown", (e) => {
   if (e.repeat) return;
   if (e.code === "Escape" || e.code === "KeyP") pause();
   if (e.code === "KeyC") camera();
+  if (e.code === "KeyH") toggleGlide();
   if (e.code === "KeyW" || e.code === "ArrowUp") trimBy(0.05);
   if (e.code === "ArrowDown") trimBy(-0.05);
 });
@@ -631,6 +652,7 @@ function frame(now) {
     scene.draw({
       mode,
       cameraMode: cam,
+      showGlide,
       t: simTime,
       dt: Math.min(dt, 0.2),
       snap,
@@ -640,7 +662,11 @@ function frame(now) {
       updateHUD();
       hudTime = now;
     }
-    sound.update(flight.state, mode === "flying");
+    sound.update(
+      flight.state,
+      mode === "flying",
+      mode === "flying" && sound.enabled ? world.passSound(flight.state) : null,
+    );
   }
   requestAnimationFrame(frame);
 }

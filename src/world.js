@@ -1,3 +1,4 @@
+import { createPassSound } from "./pass-sound.js";
 import { createValleyMist } from "./air-effects.js";
 import { flightTexture } from "./textures.js";
 import * as THREE from "three";
@@ -1154,7 +1155,9 @@ export function createWorld(scene, seed) {
     atlas,
     randomSource(seed + "/mist"),
   );
+  const passes = createPassSound();
   const vegetation = createVegetation({
+    addPass: passes.add,
     scene: world,
     seed,
     height,
@@ -1184,6 +1187,8 @@ export function createWorld(scene, seed) {
     center,
     update,
     hitsObstacle: vegetation.hitsObstacle,
+    addPass: passes.add,
+    passSound: passes.sample,
     dispose() {
       scene.remove(world);
       vegetation.dispose();
