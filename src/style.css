@@ -943,6 +943,29 @@ dialog .record small {
     bottom: 71px;
   }
 }
+@media (max-width: 650px), (pointer: coarse) {
+  .brake-pad {
+    display: grid;
+    grid-template-columns: repeat(2, auto);
+    gap: 3px;
+  }
+  .brake-pad button:last-child {
+    grid-column: span 2;
+  }
+  .touch-trim {
+    display: flex;
+    align-items: flex-end;
+  }
+  .flight-status,
+  .flight-buttons {
+    bottom: 110px;
+  }
+  .touch button {
+    touch-action: none;
+    user-select: none;
+  }
+}
+
 @media (max-height: 540px) and (orientation: landscape) {
   body {
     min-height: 300px;

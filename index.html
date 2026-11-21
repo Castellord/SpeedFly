@@ -116,20 +116,31 @@
         </button>
       </div>
       <div class="touch" hidden>
-        <div>
-          <button data-control="left">Левая</button
-          ><button aria-label="Перенести вес влево" data-control="leanLeft">
+        <div class="brake-pad">
+          <button data-control="fastLeft" aria-label="Левая клеванта резко">
+            Л резко
+          </button>
+          <button data-control="left" aria-label="Левая клеванта плавно">
+            Л плавно
+          </button>
+          <button data-control="leanLeft" aria-label="Перенести вес влево">
             Вес ←
           </button>
         </div>
-        <div>
-          <button id="touchTrimDown" aria-label="Закрыть триммеры">T−</button
-          ><button id="touchTrimUp" aria-label="Открыть триммеры">T+</button>
+        <div class="touch-trim">
+          <button id="touchTrimDown" aria-label="Закрыть триммеры">T−</button>
+          <button id="touchTrimUp" aria-label="Открыть триммеры">T+</button>
         </div>
-        <div>
-          <button aria-label="Перенести вес вправо" data-control="leanRight">
-            Вес →</button
-          ><button data-control="right">Правая</button>
+        <div class="brake-pad">
+          <button data-control="right" aria-label="Правая клеванта плавно">
+            П плавно
+          </button>
+          <button data-control="fastRight" aria-label="Правая клеванта резко">
+            П резко
+          </button>
+          <button data-control="leanRight" aria-label="Перенести вес вправо">
+            Вес →
+          </button>
         </div>
       </div>
       <div class="loading" id="loading" role="status">Генерация рельефа…</div>
@@ -166,8 +177,11 @@
       </div>
     </section>
     <footer>
-      <span class="keyhint"><kbd>A</kbd><kbd>D</kbd> Клеванты</span
-      ><span class="keyhint"><kbd>W</kbd><kbd>S</kbd> Триммеры</span
+      <span class="keyhint"
+        ><kbd>A</kbd><kbd>S</kbd> Левая · резко / плавно</span
+      ><span class="keyhint"
+        ><kbd>F</kbd><kbd>G</kbd> Правая · плавно / резко</span
+      ><span class="keyhint"><kbd>↑</kbd><kbd>↓</kbd> Триммеры</span
       ><span class="keyhint"><kbd>Q</kbd><kbd>E</kbd> Вес</span
       ><span class="keyhint"><kbd>C</kbd> Камера</span
       ><span class="keyhint"><kbd>Esc</kbd> Пауза</span

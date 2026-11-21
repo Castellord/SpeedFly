@@ -1,6 +1,8 @@
 // Point-mass flight under a banked lifting wing. Distances are metres, angles radians.
 const G = 9.81;
 const TAU = 2 * Math.PI;
+const slowBrakeRate = 1.15;
+const fastBrakeRate = 6;
 const canopySection = [
   [-4.2, 3.3],
   [0, 5.2],
@@ -57,7 +59,12 @@ export function createFlight(world, seed = 1) {
   const gates = makeCourse(world, seed);
   const state = {};
   let bankVelocity, lastUpright, canopyDeflection, deflectionRate;
-  let spiralArc, spiralDirection, invertedSide;
+  let spiralArc,
+    spiralDirection,
+    invertedSide,
+    rollImpulse,
+    pullEffort,
+    settledSteering;
 
   function reset(style = "line") {
     const first = gates[0];
@@ -110,6 +117,9 @@ export function createFlight(world, seed = 1) {
     bankVelocity = 0;
     lastUpright = 0;
     invertedSide = 0;
+    rollImpulse = 0;
+    pullEffort = 0;
+    settledSteering = 0;
     canopyDeflection = 0;
     deflectionRate = 0;
     spiralArc = 0;
@@ -129,9 +139,26 @@ export function createFlight(world, seed = 1) {
     const support = state.recoveryLoad / (0.54 + state.recoveryLoad);
     // Steady asymmetric drag produces a banked turn. In a loaded pull-out,
     // shifting the suspended mass and deflecting a half-wing gives more moment.
-    const carve = drive * (0.56 + 0.36 * Math.cos(bank));
-    const shift = state.weight * (0.12 * Math.cos(bank) + 1.45 * support);
-    const moment = carve + shift + 1.55 * support * drive;
+    const upright = Math.cos(bank);
+    const carve = drive * (0.56 * clamp(2 * upright, -1, 1) + 0.36 * upright);
+    const shift = 0.12 * state.weight * upright;
+    // A pull-out amplifies a new differential input. A held toggle does
+    // not supply a fresh rolling impulse on every pass through upright.
+    const command = differential + state.weight;
+    const changing =
+      Math.sign(command) *
+      clamp(
+        Math.sign(command) * (command - settledSteering),
+        0,
+        Math.abs(command),
+      );
+    settledSteering = approach(settledSteering, command, 0.85, dt);
+    const transient =
+      rollImpulse *
+      Math.abs(differential) *
+      Math.min(1, pressure / 0.7) *
+      (0.75 + 0.25 * Math.min(pressure, 2));
+    const moment = carve + shift + 2.65 * support * changing + transient;
     const damping =
       1.3 +
       0.18 * Math.abs(bankVelocity) +
@@ -214,6 +241,14 @@ export function createFlight(world, seed = 1) {
     out[2] = side * Math.sin(state.heading) - along * Math.cos(state.heading);
   }
 
+  function moveBrake(position, target, fast, dt) {
+    if (target < position) return approach(position, target, 8, dt);
+    return Math.min(
+      target,
+      position + (fast ? fastBrakeRate : slowBrakeRate) * dt,
+    );
+  }
+
   function integrate(dt, input) {
     const x0 = state.x,
       y0 = state.y,
@@ -222,8 +257,11 @@ export function createFlight(world, seed = 1) {
     const previousBankRate = bankVelocity;
     const right = unit(input.right),
       left = unit(input.left);
-    state.left = approach(state.left, left, 6.5, dt);
-    state.right = approach(state.right, right, 6.5, dt);
+    const oldLeft = state.left,
+      oldRight = state.right,
+      oldWeight = state.weight;
+    state.left = moveBrake(oldLeft, left, input.fastLeft, dt);
+    state.right = moveBrake(oldRight, right, input.fastRight, dt);
     state.trim = approach(state.trim, unit(input.trim ?? state.trim), 2.6, dt);
     const symmetric = Math.min(state.left, state.right);
     const differential = state.right - state.left;
@@ -232,6 +270,39 @@ export function createFlight(world, seed = 1) {
       clamp(input.weight || 0, -1, 1),
       4,
       dt,
+    );
+
+    // A moving hand loads one half of the canopy before the harness follows.
+    // A lateral weight transfer can also initiate rotation in an established
+    // carve, even with the inside brake already at the end of its travel.
+    const quickStroke =
+      Math.max(0, state.right - oldRight - slowBrakeRate * dt) -
+      Math.max(0, state.left - oldLeft - slowBrakeRate * dt);
+    const weightStep = state.weight - oldWeight;
+    const insideTransfer =
+      weightStep * Math.max(0, differential * Math.sign(weightStep));
+    // With a tensioned line a sharper pull also changes force before there
+    // is any further visible trailing-edge travel. Only increasing effort on
+    // the loaded side contributes. Holding a key cannot regenerate the pulse.
+    const effortTarget =
+      (input.fastRight ? right : 0) - (input.fastLeft ? left : 0);
+    const oldEffort = pullEffort;
+    pullEffort = approach(oldEffort, effortTarget, effortTarget ? 26 : 2, dt);
+    const effortRise =
+      Math.sign(effortTarget) *
+      Math.max(0, Math.sign(effortTarget) * (pullEffort - oldEffort));
+    const loadedTug =
+      effortRise *
+      Math.max(0, Math.sign(effortTarget) * (oldRight - oldLeft)) ** 3;
+    const asymmetricStroke = quickStroke * Math.abs(right - left);
+    const handMoment = asymmetricStroke + loadedTug;
+    rollImpulse = clamp(
+      rollImpulse * Math.exp(-1.3 * dt) +
+        handMoment *
+          (4.35 + 0.5 * Math.max(0, state.weight * Math.sign(handMoment))) +
+        2.35 * insideTransfer,
+      -4.4,
+      4.4,
     );
 
     const referenceAngle = neutralAngle(state.trim);
@@ -250,7 +321,12 @@ export function createFlight(world, seed = 1) {
         0.094 * symmetric ** 2 +
         0.038 * Math.abs(differential) +
         0.14 * separation);
-    const speedRate = -G * Math.sin(state.pitch) - drag;
+    // A rolling half-wing sweeps across the airflow. Its induced drag is
+    // greatest at high angular speed and low dynamic pressure.
+    const rollDrag =
+      (0.019 * (3.3 * bankVelocity) ** 2) /
+      (Math.max(0.55, pressure) * (1 + 10 * state.recoveryLoad));
+    const speedRate = -G * Math.sin(state.pitch) - drag - rollDrag;
     state.loadFactor = wingLift / G;
     // Excess normal acceleration during a pull-out, in units of g. Weighting
     // by kinetic headroom keeps a trim-speed brake pulse from supplying energy.

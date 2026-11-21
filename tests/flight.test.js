@@ -27,7 +27,13 @@ test("the trim polar changes speed and glide, and an energetic flare trades spee
   flyFor(flight, 5, () => ({ trim: 0 }));
   flyFor(flight, 6, () => ({ trim: 0, right: 1 }));
   const entrySpeed = s.speed;
-  flyFor(flight, 1.5, () => ({ trim: 0, left: 1, right: 1 }));
+  flyFor(flight, 1.5, () => ({
+    trim: 0,
+    left: 1,
+    right: 1,
+    fastLeft: true,
+    fastRight: true,
+  }));
   assert.ok(s.climb > 0 && s.speed < entrySpeed);
 });
 
@@ -58,7 +64,7 @@ test("a held brake orbits in a descending spiral in either direction without inv
   }
 });
 
-test("a roll requires inversion and upright recovery, and depends on the phase of the same inputs", () => {
+test("a progressive stroke with weight can roll in a loaded recovery; a late or interrupted stroke falls back", () => {
   for (const direction of [-1, 1]) {
     const entry = direction < 0 ? "right" : "left";
     const roll = direction < 0 ? "left" : "right";
@@ -113,6 +119,88 @@ test("a hard reversal from trim flight produces a wingover and comes back on the
   assert.equal(s.rolls, 0);
   assert.equal(s.spirals, 0);
   assert.ok(Math.abs(s.bank) < 0.12);
+});
+
+test("both stroke rates reach the same travel; a short sharp pull or symmetric flare cannot auto-complete a roll", () => {
+  const f = createFlight(levelField),
+    s = f.reset("free");
+  flyFor(f, 0.15, () => ({ right: 1 }));
+  const gentle = s.right;
+  flyFor(f, 1, () => ({ right: 1 }));
+  assert.equal(s.right, 1);
+  f.reset("free");
+  flyFor(f, 0.15, () => ({ right: 1, fastRight: true, weight: 1 }));
+  assert.ok(s.right > gentle * 4);
+  flyFor(f, 5, () => ({}));
+  assert.equal(s.rolls, 0);
+  f.reset("free");
+  flyFor(f, 1, () => ({ right: 1, left: 1, fastRight: true, fastLeft: true }));
+  assert.equal(s.left, 1);
+  assert.equal(s.right, 1);
+  assert.equal(s.bank, 0);
+  assert.equal(s.rolls, 0);
+});
+
+test("a sharp input rolls directly and out of an established same-side spiral", () => {
+  for (const side of ["left", "right"]) {
+    const sign = side === "right" ? 1 : -1;
+    const quick = side === "right" ? "fastRight" : "fastLeft";
+    for (const enterFromTurn of [false, true]) {
+      for (const fps of [24, 120]) {
+        const f = createFlight(levelField),
+          s = f.reset("free");
+        // Give the prolonged post-manoeuvre hold room to settle.
+        s.y = s.agl = 1000;
+        if (enterFromTurn) {
+          for (let i = 0; i < 15 * fps; i++) f.step(1 / fps, { [side]: 1 });
+          assert.equal(s.spirals, 1);
+          assert.equal(s.rolls, 0);
+          assert.equal(s[side], 1);
+        }
+        let inverted = false;
+        for (let i = 0; i < 3 * fps; i++) {
+          f.step(1 / fps, { [side]: 1, [quick]: true, weight: sign });
+          if (Math.cos(s.canopyBank) * Math.cos(s.canopyPitch) < -0.4)
+            inverted = true;
+        }
+        assert.ok(inverted);
+        assert.equal(s.rolls, 1);
+        for (let i = 0; i < 8 * fps; i++)
+          f.step(1 / fps, { [side]: 1, [quick]: true, weight: sign });
+        assert.equal(s.rolls, 1);
+        assert.equal(s.status, "flying");
+      }
+    }
+  }
+});
+
+test("an unprepared roll consumes more height and airspeed than the same stroke on a loaded exit", () => {
+  function measure(prepared) {
+    const f = createFlight(levelField),
+      s = f.reset("free");
+    if (prepared) {
+      flyFor(f, 6, () => ({ left: 1 }));
+      flyFor(f, 1.2, () => ({}));
+      flyFor(f, 0.3, () => ({
+        left: 1,
+        right: 1,
+        fastLeft: true,
+        fastRight: true,
+      }));
+      flyFor(f, 0.35, () => ({}));
+    }
+    const y = s.y,
+      speed = s.speed;
+    for (let i = 0; i < 240 && !s.rolls; i++)
+      f.step(1 / 120, { right: 1, fastRight: true, weight: 1 });
+    assert.equal(s.rolls, 1);
+    return { height: y - s.y, speed: speed - s.speed };
+  }
+  const direct = measure(false),
+    prepared = measure(true);
+  assert.ok(prepared.height > 0 && prepared.speed > 0);
+  assert.ok(direct.height > prepared.height + 3);
+  assert.ok(direct.speed > prepared.speed + 0.8);
 });
 
 // Sample the visible line ahead, then apply keyboard-sized 200 ms pulses. This

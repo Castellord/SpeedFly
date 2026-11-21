@@ -285,11 +285,11 @@ function guide() {
   showPanel(
     "<h2>Управление крылом</h2><p>На проксимити-линии центры ворот находятся в 8–11 м над склоном. Оранжевые флажки показывают коридор между воротами. Счётчик «Ниже 15 м» измеряет пройденное у склона расстояние. В режиме «Свободный полёт» старт выше, на 350 м над склоном — есть запас высоты для бочек и спиралей. Следи за высотой над склоном и скоростью снижения.</p>" +
       [
-        ["<kbd>A</kbd> / <kbd>←</kbd>", "Левая клеванта"],
-        ["<kbd>D</kbd> / <kbd>→</kbd>", "Правая клеванта"],
-        ["<kbd>A</kbd> + <kbd>D</kbd>", "Симметричное торможение"],
+        ["<kbd>A</kbd> / <kbd>S</kbd>", "Левая клеванта: резко / плавно"],
+        ["<kbd>F</kbd> / <kbd>G</kbd>", "Правая клеванта: плавно / резко"],
+        ["<kbd>Пробел</kbd>", "Обе клеванты одновременно"],
         ["<kbd>Q</kbd> / <kbd>E</kbd>", "Перенос веса влево / вправо"],
-        ["<kbd>W</kbd> / <kbd>S</kbd>", "Открыть / закрыть триммеры"],
+        ["<kbd>↑</kbd> / <kbd>↓</kbd>", "Открыть / закрыть триммеры"],
         ["<kbd>C</kbd> / <kbd>Esc</kbd>", "Смена камеры / пауза"],
       ]
         .map(
@@ -297,7 +297,7 @@ function guide() {
             '<div class="entry"><span>' + k + "</span><b>" + v + "</b></div>",
         )
         .join("") +
-      "<h3>Крен и энергия</h3><p>В свободном полёте удерживай A или D, чтобы увидеть нисходящую спираль. Крыло остаётся сбоку и выше подвески, за полный оборот по курсу засчитывается виток. Для бочки важна фаза выхода. После разгона отпусти клеванту и дай крылу вернуться над подвеской. Пробел ненадолго увеличивает нагрузку при выравнивании. Пока горит «Выход из снижения», попробуй совместить перенос веса и клеванту в одну сторону. Ранняя или запоздалая попытка может закончиться качанием. Бочка засчитывается после инверсии и возвращения купола наверх.</p><p>Манёвры рассчитаны для этой игры. На сенсорном экране «Вес ←» и «Вес →» перемещают пилота в подвеске, «Левая» и «Правая» тянут клеванты.</p>",
+      "<h3>Крен и энергия</h3><p>В свободном полёте удерживай F для плавного входа в правую спираль. Чтобы перейти в бочку в ту же сторону, добавь G и E. Для левой спирали используй S, для перехода — A и Q. Резкая затяжка с весом работает и из прямого полёта. Такой вход расходует больше высоты и воздушной скорости, чем вход после выравнивания разогнанного крыла.</p><p>Короткое нажатие даёт часть хода клеванты. Шкалы «Л» и «П» показывают её положение. Полный виток по курсу и переворот с возвращением купола наверх считаются отдельно.</p>",
     "help",
   );
 }
@@ -506,7 +506,7 @@ window.addEventListener("keydown", (e) => {
   if (e.code === "Escape" || e.code === "KeyP") pause();
   if (e.code === "KeyC") camera();
   if (e.code === "KeyW" || e.code === "ArrowUp") trimBy(0.05);
-  if (e.code === "KeyS" || e.code === "ArrowDown") trimBy(-0.05);
+  if (e.code === "ArrowDown") trimBy(-0.05);
 });
 window.addEventListener("keyup", (e) => keys.delete(e.code));
 window.addEventListener("blur", () => {
@@ -563,11 +563,21 @@ function frame(now) {
         pass = s.passed,
         roll = s.rolls;
       const up = held(["KeyW", "ArrowUp"]),
-        down = held(["KeyS", "ArrowDown"]);
+        down = keys.has("ArrowDown");
       trimBy((Number(up) - Number(down)) * 0.4 * Math.min(dt, 0.2));
+      const fastLeft = held(["KeyA", "Space"]) || touches.has("fastLeft");
+      const fastRight = held(["KeyG", "Space"]) || touches.has("fastRight");
       flight.step(dt, {
-        left: +(touches.has("left") || held(["KeyA", "ArrowLeft", "Space"])),
-        right: +(touches.has("right") || held(["KeyD", "ArrowRight", "Space"])),
+        left: Number(
+          fastLeft || held(["KeyS", "ArrowLeft"]) || touches.has("left"),
+        ),
+        right: Number(
+          fastRight ||
+            held(["KeyF", "KeyD", "ArrowRight"]) ||
+            touches.has("right"),
+        ),
+        fastLeft,
+        fastRight,
         weight:
           Number(touches.has("leanRight") || keys.has("KeyE")) -
           Number(touches.has("leanLeft") || keys.has("KeyQ")),
