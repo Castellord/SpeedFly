@@ -201,7 +201,7 @@ function landMaterial() {
           vec3 chip = granite(pos*vec3(1.,1.28,.82)/26. + vec3(broad.b,broad.r,broad.g)*.19,weights);
           cliffGrain = mix(block,chip,.37);
           float tone=dot(cliffGrain,luma);
-          stone = stone*(.42+tone*1.47) + (cliffGrain-vec3(tone))*.52;
+          stone = mix(stone,vec3(.47,.485,.48)+mottling*.23,.48)*(.42+tone*1.47) + (cliffGrain-vec3(tone))*.52;
           reliefDetail += (dot(block,luma)*12. + dot(chip,luma)*1.7)*mineral;
         }
         vec3 surface = mix(meadow, stone, mineral);
@@ -210,6 +210,7 @@ function landMaterial() {
         float exposure = pos.y - 1540. + relief*.30 - n.x * 181. - n.z * 94.;
         float snow = smoothstep(-24., 45., exposure - steep*1080. + mottling*620.
                         + (rock.r-.5)*165. + (dot(cliffGrain,luma)-.46)*210.);
+        snow *= 1.-smoothstep(.19,.52,steep)*smoothstep(.04,.26,.45-rock.r)*.55;
         vec3 ice = mix(vec3(.74,.80,.82), vec3(.985,.98,.95), broad.g + fine*.21 + rock.g*.11);
         surface = mix(surface, ice, snow);
         reliefDetail *= 1.-snow*.94;
@@ -226,7 +227,8 @@ function landMaterial() {
         vec3 tangentX=cross(dpdy,n), tangentY=cross(n,dpdx);
         float det=dot(dpdx,tangentX);
         vec3 grad=(dFdx(reliefDetail)*tangentX+dFdy(reliefDetail)*tangentY) * sign(det);
-        n=normalize(n - clamp(grad/max(abs(det),.0001),vec3(-.55),vec3(.55))*(1.-river));
+        float nearBump=1.-smoothstep(160.,1400.,length(cameraPosition-pos));
+        n=normalize(n - clamp(grad/max(abs(det),.0001),vec3(-.44),vec3(.44))*(1.-river)*nearBump);
         float diffuse = max(dot(n,sun),0.);
         float light = .70 + diffuse*.39;
         vec3 lit = surface * light * mix(vec3(.84,.90,.99),vec3(1.055,1.02,.965),diffuse);
