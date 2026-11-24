@@ -111,22 +111,5 @@ export function createSound() {
         0.15,
       );
     },
-    gate() {
-      if (!context || !active) return;
-      const osc = context.createOscillator(),
-        env = context.createGain(),
-        t = context.currentTime;
-      osc.frequency.setValueAtTime(660, t);
-      osc.frequency.exponentialRampToValueAtTime(990, t + 0.09);
-      env.gain.setValueAtTime(0.055, t);
-      env.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
-      osc.connect(env).connect(context.destination);
-      osc.start(t);
-      osc.stop(t + 0.2);
-      osc.onended = () => {
-        osc.disconnect();
-        env.disconnect();
-      };
-    },
   };
 }

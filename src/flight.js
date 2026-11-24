@@ -57,7 +57,10 @@ const glideSlope = (trim) => 0.19 + 0.42 * trim ** 1.16;
 const neutralAngle = (trim) => -Math.atan(glideSlope(trim));
 
 export function createFlight(world, seed = 1) {
-  const gates = makeCourse(world, seed);
+  // The separate Mac game still supplies a scored gate course.
+  const openLine = Number.isFinite(world.finishZ);
+  const gates = openLine ? [] : makeCourse(world, seed);
+  const finishZ = world.finishZ ?? gates.at(-1).z;
   let state = {};
   const forecastState = {};
   let remainingTime = 0;
@@ -66,14 +69,16 @@ export function createFlight(world, seed = 1) {
   function reset(style = "line") {
     remainingTime = 0;
     lastInput = {};
-    const first = gates[0];
+    const first = openLine ? { x: world.center(-35), z: -35 } : gates[0];
     const x = world.center(0);
     const ground = world.height(x, 0);
     const heading = Math.atan2(first.x - x, -first.z);
     const y = ground + (style === "free" ? 350 : 11);
     // An airborne start is already established on the first leg's glide angle.
     // From here on the pilot alone determines height, speed and direction.
-    const initialSlope = (y - first.y) / Math.hypot(first.x - x, first.z);
+    const initialSlope = openLine
+      ? glideSlope(1)
+      : (y - first.y) / Math.hypot(first.x - x, first.z);
     const trim =
       style === "free"
         ? 0.5
@@ -126,6 +131,7 @@ export function createFlight(world, seed = 1) {
     state.lastUpright = 0;
     state.invertedSide = 0;
     state.rollImpulse = 0;
+    state.carvePressure = 0;
     state.pullEffort = 0;
     state.settledSteering = 0;
     state.canopyDeflection = 0;
@@ -192,7 +198,7 @@ export function createFlight(world, seed = 1) {
       (0.19 + 0.14 * Math.min(pressure, 2)) *
       Math.min(1, pressure / 0.75);
     state.deflectionRate +=
-      (38 * (steering - state.canopyDeflection) - 8 * state.deflectionRate) *
+      (38 * (steering - state.canopyDeflection) - 12.5 * state.deflectionRate) *
       dt;
     state.canopyDeflection += state.deflectionRate * dt;
     const bank = state.bank;
@@ -201,7 +207,11 @@ export function createFlight(world, seed = 1) {
     // Steady asymmetric drag produces a banked turn. In a loaded pull-out,
     // shifting the suspended mass and deflecting a half-wing gives more moment.
     const upright = Math.cos(bank);
-    const carve = drive * (0.56 * clamp(2 * upright, -1, 1) + 0.36 * upright);
+    // A held inside hand keeps curving the existing turn even as the
+    // harness passes over the wing. Gravity still acts in the world frame.
+    const carve =
+      drive *
+      (0.58 * clamp(2.6 * Math.abs(upright), 0, 1) + 0.64 * Math.abs(upright));
     const shift = 0.12 * state.weight * upright;
     // A pull-out amplifies a new differential input. A held toggle does
     // not supply a fresh rolling impulse on every pass through upright.
@@ -219,9 +229,13 @@ export function createFlight(world, seed = 1) {
       Math.abs(differential) *
       Math.min(1, pressure / 0.7) *
       (0.75 + 0.25 * Math.min(pressure, 2));
-    const moment = carve + shift + 2.65 * support * changing + transient;
+    const moment = carve + shift + 3.05 * support * changing + transient;
+    const settled =
+      1 /
+      (1 + 5 * Math.abs(state.rollImpulse) + 5 * support * Math.abs(changing));
     const damping =
       1.3 +
+      6.5 * settled * Math.max(0, upright) * Math.abs(differential) +
       0.18 * Math.abs(state.bankVelocity) +
       0.58 * brake +
       0.62 * (1 - Math.min(1, Math.abs(drive) + Math.abs(state.weight))) ** 2;
@@ -229,8 +243,7 @@ export function createFlight(world, seed = 1) {
       (5.8 * (moment - Math.sin(bank)) - damping * state.bankVelocity) * dt;
     state.bank += state.bankVelocity * dt;
     state.bankRate = state.bankVelocity;
-    state.canopyBank =
-      state.bank + 0.25 * state.canopyDeflection + 0.19 * state.deflectionRate;
+    state.canopyBank = state.bank + 0.24 * state.canopyDeflection;
     return dragImbalance;
   }
 
@@ -295,7 +308,8 @@ export function createFlight(world, seed = 1) {
   const harnessBefore = [0, 0, 0],
     harnessAfter = [0, 0, 0];
   function harnessOffset(out) {
-    const side = -swingRadius * Math.sin(state.bank);
+    const side =
+      -swingRadius * Math.sin(state.bank) * (1 - Math.cos(state.bank)) * 0.5;
     const down = -swingRadius * Math.cos(state.bank);
     const along = -down * Math.sin(state.pitch);
     out[0] = side * Math.cos(state.heading) + along * Math.sin(state.heading);
@@ -338,9 +352,7 @@ export function createFlight(world, seed = 1) {
       dt,
     );
 
-    // A moving hand loads one half of the canopy before the harness follows.
-    // A lateral weight transfer can also initiate rotation in an established
-    // carve, even with the inside brake already at the end of its travel.
+    // Hand travel and the initial weight transfer load the inside half-wing.
     const rightTravel = Math.max(0, state.right - oldRight);
     const leftTravel = Math.max(0, state.left - oldLeft);
     // Rate-dependent loading grows continuously with hand velocity. A hand
@@ -369,14 +381,28 @@ export function createFlight(world, seed = 1) {
       effortRise *
       Math.max(0, Math.sign(effortTarget) * (oldRight - oldLeft)) ** 3;
     const asymmetricStroke = quickStroke * Math.abs(right - left);
-    const handMoment = asymmetricStroke + loadedTug;
+    // Resolve a new stroke along the angular motion already present. A
+    // loaded carve has track curvature and little axial roll. An inverted
+    // rolling wing retains axial momentum when the stroke rate changes.
+    const turnRate = state.headingRate;
+    const planeShare =
+      turnRate ** 2 / (0.05 + turnRate ** 2 + state.bankRate ** 2);
+    const insideEffort =
+      Math.max(0, state.pullEffort * Math.sign(turnRate)) * planeShare;
+    state.carvePressure = approach(state.carvePressure, insideEffort, 2.8, dt);
+    // The outside hand has more leverage to unwind the existing bank.
+    const outsideBrake = Math.max(0, -differential * Math.sign(turnRate));
+    const rollShare = 1 - planeShare * (1 - 0.35 * outsideBrake);
+    const handMoment = (asymmetricStroke + loadedTug) * rollShare;
     state.rollImpulse = clamp(
       state.rollImpulse * Math.exp(-1.3 * dt) +
         handMoment *
-          (4.35 + 0.5 * Math.max(0, state.weight * Math.sign(handMoment))) +
-        2.35 * insideTransfer,
-      -4.4,
-      4.4,
+          (4.35 +
+            1.8 * state.recoveryLoad +
+            0.5 * Math.max(0, state.weight * Math.sign(handMoment))) +
+        2.35 * insideTransfer * rollShare,
+      -4.4 - state.recoveryLoad,
+      4.4 + state.recoveryLoad,
     );
 
     const referenceAngle = neutralAngle(state.trim);
@@ -421,13 +447,22 @@ export function createFlight(world, seed = 1) {
         1.55 * separation -
         0.7 * asymmetricLoss,
     );
-    const wingLift = G * Math.cos(referenceAngle) * pressure * liftCoefficient;
+    const turnLoading =
+      Math.abs(differential) * Math.sin(state.canopyBank) ** 2;
+    const wingLift =
+      G *
+      Math.cos(referenceAngle) *
+      pressure *
+      liftCoefficient *
+      (1 + turnLoading * (0.3 + 0.36 * state.carvePressure));
     const drag =
       G *
       pressure *
       (-Math.sin(referenceAngle) * (1 + 0.8 * brake) +
         0.094 * symmetric ** 2 +
         0.038 * Math.abs(differential) +
+        0.07 * turnLoading +
+        0.12 * state.carvePressure +
         0.72 * separation +
         0.3 * asymmetricLoss);
     // A rolling half-wing sweeps across the airflow. Its induced drag is
@@ -543,8 +578,8 @@ export function createFlight(world, seed = 1) {
       state.status = gentle ? "landed" : "crashed";
       state.impact = "terrain";
     } else if (
-      state.nextGate === gates.length ||
-      (state.style === "free" && state.z <= gates.at(-1).z)
+      state.z <= finishZ &&
+      (openLine || state.style === "free" || state.nextGate === gates.length)
     ) {
       state.status = "finished";
     }

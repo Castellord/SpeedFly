@@ -16,7 +16,6 @@ const shapes = {
   route:
     '<circle cx="5" cy="17" r="2"/><circle cx="19" cy="6" r="2"/><path d="M7 17h7a3 3 0 0 0 0-6h-4a2.5 2.5 0 0 1 0-5h7"/>',
   descent: '<path d="m2 18 7-11 5 7 3-5 5 9zm7-11 3 5-3-1-2 1"/>',
-  gate: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4.5"/>',
   activity: '<path d="M2 13h5l3-8 4 14 3-8 2 2h3"/>',
   x: '<path d="m6 6 12 12M18 6 6 18"/>',
 };
@@ -28,7 +27,7 @@ export function icons(root = document) {
       "</svg>";
   });
 }
-export function createMap(canvas, world, gates) {
+export function createMap(canvas, world, route) {
   const bg = document.createElement("canvas"),
     w = 340,
     h = 228;
@@ -38,7 +37,7 @@ export function createMap(canvas, world, gates) {
   canvas.height = h;
   const ctx = bg.getContext("2d"),
     out = canvas.getContext("2d");
-  const minZ = gates.at(-1).z - 320,
+  const minZ = route.at(-1).z - 320,
     maxZ = 380;
   const minX = -1640,
     maxX = 1640;
@@ -92,7 +91,7 @@ export function createMap(canvas, world, gates) {
       }
     ctx.stroke();
   }
-  const nodes = [{ x: world.center(0), z: 0 }, ...gates];
+  const nodes = route;
   ctx.strokeStyle = "#ff854b";
   ctx.lineWidth = 2.6;
   ctx.setLineDash([5, 3]);
@@ -102,7 +101,7 @@ export function createMap(canvas, world, gates) {
   );
   ctx.stroke();
   ctx.setLineDash([]);
-  const end = gates.at(-1);
+  const end = route.at(-1);
   ctx.fillStyle = "#e9ead9";
   ctx.fillRect(px(end.x) - 4, py(end.z) - 4, 8, 8);
   return (state) => {

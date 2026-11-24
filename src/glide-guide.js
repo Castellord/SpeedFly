@@ -29,7 +29,7 @@ export function createGlideGuide(scene) {
   mesh.visible = false;
   scene.add(mesh);
   const clear = new THREE.Color(0x71efbe),
-    miss = new THREE.Color(0xffbb57),
+    lowClearance = new THREE.Color(0xffbb57),
     danger = new THREE.Color(0xff5742);
   const previous = new THREE.Vector3(),
     current = new THREE.Vector3();
@@ -49,13 +49,9 @@ export function createGlideGuide(scene) {
     let vertex = 0,
       sample = 0,
       warningFrom = Infinity,
-      impact = false,
-      gateMiss = false;
-    const startGate = flight.state.nextGate;
+      impact = false;
     flight.predictGlide((s) => {
       current.set(s.x, s.y - 0.28, s.z);
-      if (s.nextGate > startGate && s.missed > flight.state.missed)
-        gateMiss = true;
       if (s.status === "crashed" || s.status === "landed") impact = true;
       if (sample++ > 1) {
         const dx = current.x - previous.x,
@@ -80,8 +76,8 @@ export function createGlideGuide(scene) {
       const tint =
         impact && i >= Math.max(0, vertex - 30)
           ? danger
-          : gateMiss || i >= warningFrom
-            ? miss
+          : i >= warningFrom
+            ? lowClearance
             : clear;
       colors.setXYZ(i, tint.r, tint.g, tint.b);
     }

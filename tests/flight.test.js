@@ -141,36 +141,75 @@ test("both stroke rates reach the same travel; a short sharp pull or symmetric f
   assert.equal(s.rolls, 0);
 });
 
-test("a sharp input rolls directly and out of an established same-side spiral", () => {
-  for (const side of ["left", "right"]) {
-    const sign = side === "right" ? 1 : -1;
-    const quick = side === "right" ? "fastRight" : "fastLeft";
-    for (const enterFromTurn of [false, true]) {
-      for (const fps of [24, 120]) {
-        const f = createFlight(levelField),
-          s = f.reset("free");
-        // Give the prolonged post-manoeuvre hold room to settle.
+const horizontalRadius = (s) =>
+  (s.speed * Math.cos(s.pitch)) / Math.abs(s.headingRate);
+
+test("a smooth stroke banks continuously and an inside regrip tightens the descending spiral", () => {
+  for (const sign of [-1, 1]) {
+    const side = sign > 0 ? "right" : "left";
+    const fast = sign > 0 ? "fastRight" : "fastLeft";
+    for (const fps of [24, 120]) {
+      for (const weight of [0, sign]) {
+        const flight = createFlight(levelField);
+        const s = flight.reset("free");
         s.y = s.agl = 1000;
-        if (enterFromTurn) {
-          for (let i = 0; i < 15 * fps; i++) f.step(1 / fps, { [side]: 1 });
-          assert.equal(s.spirals, 1);
-          assert.equal(s.rolls, 0);
-          assert.equal(s[side], 1);
+        let bank = 0;
+        for (let i = 0; i < 15 * fps; i++) {
+          flight.step(1 / fps, { [side]: 1 });
+          assert.ok(sign * s.canopyBank >= bank - 0.0001);
+          assert.ok(sign * s.headingRate >= -0.0001);
+          bank = sign * s.canopyBank;
         }
-        let inverted = false;
+        const radius = horizontalRadius(s);
+        assert.ok(radius > 16 && radius < 26);
         for (let i = 0; i < 3 * fps; i++) {
-          f.step(1 / fps, { [side]: 1, [quick]: true, weight: sign });
-          if (Math.cos(s.canopyBank) * Math.cos(s.canopyPitch) < -0.4)
-            inverted = true;
+          flight.step(1 / fps, { [side]: 1, [fast]: true, weight });
+          assert.ok(sign * s.headingRate > 0 && s.pitch < -0.4);
+          assert.ok(Math.cos(s.canopyBank) > 0);
         }
-        assert.ok(inverted);
-        assert.equal(s.rolls, 1);
-        for (let i = 0; i < 8 * fps; i++)
-          f.step(1 / fps, { [side]: 1, [quick]: true, weight: sign });
-        assert.equal(s.rolls, 1);
-        assert.equal(s.status, "flying");
+        assert.ok(horizontalRadius(s) < radius * 0.94);
+        assert.equal(s.rolls, 0);
       }
     }
+  }
+});
+
+test("switching to a smooth stroke above the canopy carries the roll through as airspeed falls", () => {
+  for (const sign of [-1, 1]) {
+    const side = sign > 0 ? "right" : "left";
+    const fast = sign > 0 ? "fastRight" : "fastLeft";
+    for (const fps of [24, 120]) {
+      const flight = createFlight(levelField);
+      const s = flight.reset("free");
+      for (let i = 0; i < 2 * fps && sign * s.bank < Math.PI * 0.9; i++) {
+        flight.step(1 / fps, { [side]: 1, [fast]: true, weight: sign });
+      }
+      assert.ok(Math.cos(s.canopyBank) < -0.75);
+      const bank = s.bank,
+        speed = s.speed,
+        pitch = s.pitch;
+      for (let i = 0; i < fps / 2; i++) {
+        flight.step(1 / fps, { [side]: 1 });
+        assert.ok(sign * s.bankRate > 0);
+      }
+      assert.ok(sign * (s.bank - bank) > 1);
+      assert.ok(s.speed < speed && s.pitch < pitch);
+      for (let i = 0; i < fps; i++) flight.step(1 / fps, { [side]: 1 });
+      assert.equal(s.rolls, 1);
+    }
+  }
+});
+
+test("holding a fast stroke from straight flight cannot retrigger the initial roll", () => {
+  for (const sign of [-1, 1]) {
+    const flight = createFlight(levelField);
+    const s = flight.reset("free");
+    s.y = s.agl = 1000;
+    const input =
+      sign > 0 ? { right: 1, fastRight: true } : { left: 1, fastLeft: true };
+    flyFor(flight, 11, () => ({ ...input, weight: sign }));
+    assert.equal(s.rolls, 1);
+    assert.equal(s.status, "flying");
   }
 });
 
@@ -210,17 +249,12 @@ function followLine(flight, world) {
     heights = [];
   let left = 0,
     right = 0,
-    trim = s.trim,
     pulse = 0,
     previousBank = 0;
   for (let frame = 0; frame < 18000 && s.status === "flying"; frame++) {
     if (frame % 12 === 0) {
-      const gate = flight.gates[s.nextGate],
-        look = 42,
-        z = s.z - look;
-      const x =
-        world.center(z) +
-        clamp((gate.z - z) / look, 0, 1) * (gate.x - world.center(gate.z));
+      const look = 42;
+      const x = world.center(s.z - look);
       const headingError = Math.atan2(x - s.x, look) - s.heading;
       const bankRate = (s.bank - previousBank) / 0.2;
       previousBank = s.bank;
@@ -234,47 +268,28 @@ function followLine(flight, world) {
       right = Number(pulse > 0.43);
       left = Number(pulse < -0.43);
       pulse -= right - left;
-      // Look across sudden rock shelves and choose a glide between their lips.
-      let envelope = world.height(x, z);
-      for (const offset of [-85, -42, 42, 85]) {
-        const probeZ = z + offset;
-        const projected =
-          world.height(world.center(probeZ), probeZ) - 0.325 * offset;
-        envelope = Math.max(envelope, projected);
-      }
-      const slope = (s.y - envelope - 9) / Math.hypot(look, x - s.x);
-      const targetTrim = clamp(
-        (Math.max(0, slope - 0.19) / 0.42) ** (1 / 1.16),
-        0,
-        1,
-      );
-      if (Math.abs(targetTrim - trim) > 0.026)
-        trim = clamp(trim + Math.sign(targetTrim - trim) * 0.05, 0, 1);
     }
-    flight.step(dt, { left, right, trim });
+    flight.step(dt, { left, right, trim: 1 });
     heights.push(s.agl);
   }
   return heights.sort((a, b) => a - b);
 }
 
-test("proximity courses can be flown continuously with discrete controls", () => {
-  for (const seed of [1847, 6, 42]) {
+test("proximity courses reach the finish at full open trim using only keyboard steering", () => {
+  for (const seed of [1847, 6, 42, 4, 8, 935, 8175, 1221]) {
     const world = createWorld(new Scene(), seed);
     try {
       const flight = createFlight(world, seed);
       assert.equal(flight.reset("free").agl, 350);
-      flight.reset();
-      for (const gate of flight.gates) {
-        const height = gate.y - world.height(gate.x, gate.z);
-        assert.ok(height >= 8 && height <= 11);
-        assert.ok(gate.radius >= 6 && gate.radius <= 8);
-      }
+      const s = flight.reset();
+      assert.equal(s.trim, 1);
+      assert.equal(flight.gates.length, 0);
       const heights = followLine(flight, world);
-      assert.equal(flight.state.status, "finished", String(seed));
-      assert.equal(flight.state.passed, flight.gates.length, String(seed));
-      assert.ok(heights[Math.floor(0.95 * heights.length)] < 20);
-      assert.ok(flight.state.proximityDistance > 0.85 * flight.state.distance);
-      assert.ok(flight.state.proximityDistance <= flight.state.distance);
+      assert.equal(s.status, "finished", String(seed));
+      assert.ok(s.z <= world.finishZ);
+      assert.equal(s.trim, 1);
+      assert.ok(heights[0] > 1 && heights[Math.floor(heights.length / 2)] < 23);
+      assert.ok(s.proximityDistance > 0 && s.proximityDistance <= s.distance);
     } finally {
       world.dispose();
     }

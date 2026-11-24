@@ -82,9 +82,8 @@ function saveRun(status) {
       title,
       style,
       time: s.time,
-      passed: s.passed,
+      distance: Math.round(s.distance),
       proximityDistance: Math.round(s.proximityDistance),
-      total: flight.gates.length,
       rolls: s.rolls,
       spirals: s.spirals,
       status,
@@ -172,12 +171,16 @@ async function generated(newSeed, newNumber) {
   await scene.warmup();
   loadingStage("Подготовка приборов", 4);
   await nextPaint();
-  drawMap = createMap($("map"), world, flight.gates);
-  const g = flight.gates;
+  const stations = Math.ceil(Math.abs(world.finishZ) / 40);
+  const route = Array.from({ length: stations + 1 }, (_, i) => {
+    const z = (world.finishZ * i) / stations;
+    return { x: world.center(z), z };
+  });
+  drawMap = createMap($("map"), world, route);
   let dist = 0,
     x = flight.state.x,
     z = 0;
-  for (const p of g) {
+  for (const p of route) {
     dist += Math.hypot(p.x - x, p.z - z);
     x = p.x;
     z = p.z;
@@ -188,7 +191,6 @@ async function generated(newSeed, newNumber) {
   $("drop").textContent = formatter.format(
     Math.round(world.height(world.center(0), 0) - world.height(x, z)),
   );
-  $("gatesCount").textContent = g.length;
   $("routeName").textContent = title;
   $("lineNo").textContent = "ЛИНИЯ " + String(number).padStart(3, "0");
   configureStart();
@@ -204,13 +206,8 @@ function configureStart() {
   targetTrim = flight.state.trim;
   const free = style === "free";
   $("turnReadout").hidden = !free;
-  $("gatesCount").textContent = free
-    ? Math.round(flight.state.agl)
-    : flight.gates.length;
-  $("courseUnit").textContent = free ? "м над склоном" : "ворот";
-  $("courseIcon").dataset.i = free ? "descent" : "gate";
-  icons($("courseIcon").parentElement);
-  $("goalLabel").textContent = free ? "Свободный полёт" : "Следующие ворота";
+  $("startHeight").textContent = Math.round(flight.state.agl);
+  $("goalLabel").textContent = free ? "Свободный полёт" : "До конца спуска";
 }
 $("flightStyle").onchange = (e) => {
   if (mode === "preview") {
@@ -272,15 +269,8 @@ function updateHUD() {
   $("rightMeter").value = s.right;
   drawMap(s);
   drawCompass($("compass"), s.heading);
-  const gate = flight.gates[s.nextGate];
-  $("goal").textContent = gate
-    ? String(s.nextGate + 1).padStart(2, "0") +
-      " / " +
-      flight.gates.length +
-      " · " +
-      Math.round(Math.hypot(gate.x - s.x, gate.y - s.y, gate.z - s.z)) +
-      " м"
-    : "Финиш";
+  $("goal").textContent =
+    formatter.format(Math.round(Math.max(0, s.z - world.finishZ))) + " м";
   if (style === "free") {
     const bank = Math.atan2(Math.sin(s.bank), Math.cos(s.bank));
     $("bankAngle").textContent = Math.round((bank * 180) / Math.PI) + "°";
@@ -300,7 +290,7 @@ function updateHUD() {
   $("passed").textContent =
     style === "free"
       ? "Витки · " + s.spirals + "　Бочки · " + s.rolls
-      : s.passed + " / " + flight.gates.length + " пройдено";
+      : formatter.format(Math.round(s.distance)) + " м пройдено";
   $("clock").textContent = clock(s.time);
   $("lowDistance").textContent =
     formatter.format(Math.round(s.proximityDistance ?? 0)) + " м";
@@ -332,7 +322,7 @@ function closePanel(resume = true) {
 }
 function guide() {
   showPanel(
-    "<h2>Управление крылом</h2><p>На проксимити-линии центры ворот находятся в 8–11 м над склоном. Оранжевые флажки показывают коридор между воротами. Счётчик «Ниже 15 м» измеряет пройденное у склона расстояние. В режиме «Свободный полёт» старт выше, на 350 м над склоном — есть запас высоты для бочек и спиралей. Следи за высотой над склоном и скоростью снижения.</p>" +
+    "<h2>Управление крылом</h2><p>На проксимити-линии стартуй с открытыми триммерами и выбирай путь по склону. Конец спуска отмечен на карте. Счётчик «Ниже 15 м» измеряет пройденное у склона расстояние. В режиме «Свободный полёт» старт выше, на 350 м над склоном — есть запас высоты для бочек и спиралей. Следи за высотой над склоном и скоростью снижения.</p>" +
       [
         ["<kbd>A</kbd> / <kbd>S</kbd>", "Левая клеванта: резко / плавно"],
         ["<kbd>F</kbd> / <kbd>G</kbd>", "Правая клеванта: плавно / резко"],
@@ -341,7 +331,7 @@ function guide() {
         ["<kbd>↑</kbd> / <kbd>↓</kbd>", "Открыть / закрыть триммеры"],
         [
           "<kbd>H</kbd>",
-          "Прогноз глайда на 8 с. Зелёный — свободный путь, янтарный — низко или мимо ворот, красный — касание",
+          "Прогноз глайда на 8 с. Зелёный — свободный путь, янтарный — малый запас высоты, красный — касание",
         ],
         ["<kbd>C</kbd> / <kbd>Esc</kbd>", "Смена камеры / пауза"],
       ]
@@ -350,7 +340,7 @@ function guide() {
             '<div class="entry"><span>' + k + "</span><b>" + v + "</b></div>",
         )
         .join("") +
-      "<h3>Крен и энергия</h3><p>В свободном полёте удерживай F для плавного входа в правую спираль. Чтобы перейти в бочку в ту же сторону, добавь G и E. Для левой спирали используй S, для перехода — A и Q. Резкая затяжка с весом работает и из прямого полёта. Такой вход расходует больше высоты и воздушной скорости, чем вход после выравнивания разогнанного крыла.</p><p>Чтобы сравнить перекладки, подержи F пять секунд. Затем отпусти F и в одном полёте зажми A, в другом — S. Приборы «Крен» и «Разворот» показывают наклон подвески и скорость изменения курса. При отпускании крыло ещё доворачивает.</p><p>Обе клеванты вместе на скорости сначала уменьшают снижение. Если долго держать их внизу, скорость падает и снижение усиливается. После отпускания крыло клюёт и разгоняется.</p>",
+      "<h3>Крен и энергия</h3><p>В свободном полёте удерживай F для плавного входа в правую спираль. Дожим правой клеванты в установившейся спирали уменьшает радиус. Слева действуют S и A соответственно. В бочке переход на плавную клеванту сохраняет накопленное вращение, а с потерей скорости меняется наклон траектории. Резкая затяжка с весом работает и из прямого полёта. Такой вход расходует больше высоты и воздушной скорости, чем вход после выравнивания разогнанного крыла.</p><p>Чтобы сравнить перекладки, подержи F пять секунд. Затем отпусти F и в одном полёте зажми A, в другом — S. Приборы «Крен» и «Разворот» показывают наклон подвески и скорость изменения курса. При отпускании крыло ещё доворачивает.</p><p>Обе клеванты вместе на скорости сначала уменьшают снижение. Если долго держать их внизу, скорость падает и снижение усиливается. После отпускания крыло клюёт и разгоняется.</p>",
     "help",
   );
 }
@@ -361,7 +351,7 @@ function journal() {
   let html = "<h2>Журнал полётов</h2>";
   if (!records.length)
     html +=
-      "<p>Здесь появятся пройденные линии, время полёта и результат по воротам. Первый полёт уже готов к старту.</p>";
+      "<p>Здесь появятся пройденные линии, время полёта и дистанция у склона. Первый полёт уже готов к старту.</p>";
   for (const r of records) {
     const label =
       {
@@ -385,7 +375,9 @@ function journal() {
         ? (Number.isFinite(r.spirals) ? "Витки · " + r.spirals + "　" : "") +
           "Бочки · " +
           Number(r.rolls)
-        : Number(r.passed) + " / " + Number(r.total) + " ворот") +
+        : Number.isFinite(r.distance)
+          ? formatter.format(r.distance) + " м"
+          : "Проксимити") +
       "</span></div>";
   }
   showPanel(html, "log");
@@ -419,9 +411,7 @@ function finish() {
       "</p>" +
       [
         ["Время", clock(s.time)],
-        style === "free"
-          ? ["Режим", "Свободный полёт"]
-          : ["Пройдено ворот", s.passed + " / " + flight.gates.length],
+        ["Режим", style === "free" ? "Свободный полёт" : "Проксимити"],
         ["Дистанция", (s.distance / 1000).toFixed(2).replace(".", ",") + " км"],
         [
           "Ниже 15 м над склоном",
@@ -617,8 +607,6 @@ function frame(now) {
   if (flight && mode !== "loading" && !document.hidden) {
     if (mode === "flying") {
       const s = flight.state,
-        old = s.nextGate,
-        pass = s.passed,
         roll = s.rolls;
       const up = held(["KeyW", "ArrowUp"]),
         down = keys.has("ArrowDown");
@@ -642,10 +630,7 @@ function frame(now) {
         trim: targetTrim,
       });
       if (s.status !== "flying") finish();
-      else if (old !== s.nextGate) {
-        if (s.passed > pass) sound.gate();
-        notify(s.passed > pass ? "Ворота пройдены" : "Пропуск ворот");
-      } else if (s.rolls > roll) notify("Бочка · 360°");
+      else if (s.rolls > roll) notify("Бочка · 360°");
       simTime = s.time;
     } else if (mode === "preview" && !reducedMotion.matches)
       simTime += Math.min(dt, 0.1);

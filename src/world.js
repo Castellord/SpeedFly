@@ -664,15 +664,29 @@ export function createWorld(scene, seed) {
         amplitude * (Math.sin(z / period + phases[i]) - Math.sin(phases[i])),
       -wallSide * 690 * smooth(3440, 6360, -z),
     );
-  const start = style === 0 ? 1795 + rng() * 115 : 1610 + rng() * 360;
-  const grade = 0.309 + rng() * 0.037;
+  const start = style === 0 ? 2145 + rng() * 115 : 2010 + rng() * 360;
+  // The open-trim polar descends 0.61 metres per horizontal metre.
+  // Integrate along the bends, since a traverse is longer than its Z span.
+  const grade = 0.609 + rng() * 0.002;
+  const stride = 10,
+    lengths = [0];
+  for (let i = 1; i <= 355; i++) {
+    const z = -i * stride;
+    lengths.push(
+      lengths[i - 1] + Math.hypot(stride, center(z) - center(z + stride)),
+    );
+  }
   function floor(z) {
     const along = clamp(z, -3550, 550);
+    const station = Math.max(0, -along / stride);
+    const i = Math.min(lengths.length - 2, Math.floor(station));
+    const path =
+      along >= 0 ? along : -mix(lengths[i], lengths[i + 1], station - i);
     return (
       start +
-      along * grade +
-      9 * (Math.sin(along / 300 + phases[3]) - Math.sin(phases[3])) +
-      3.2 * (Math.sin(along / 184 + phases[4]) - Math.sin(phases[4])) +
+      path * grade +
+      2.4 * (Math.sin(along / 300 + phases[3]) - Math.sin(phases[3])) +
+      1.3 * (Math.sin(along / 184 + phases[4]) - Math.sin(phases[4])) +
       Math.min(0, Math.max(-2000, z + 3550)) * 0.055
     );
   }
@@ -1183,6 +1197,7 @@ export function createWorld(scene, seed) {
   }
   update(center(0), 0, 0);
   return {
+    finishZ: -3200,
     height,
     center,
     update,

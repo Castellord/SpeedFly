@@ -6,7 +6,6 @@ import * as THREE from "three";
 import { createWorld } from "./world.js";
 import { createWing, createCockpit } from "./wing.js";
 import { createScannedRocks } from "./scanned-rocks.js";
-import { createCourseMarkers } from "./course-markers.js";
 import { createWingShadow } from "./wing-shadow.js";
 import { createFlight } from "./flight.js";
 
@@ -34,7 +33,6 @@ export function createScene(canvas) {
   scene.add(camera);
   const renderMotion = createMotion(renderer);
   const guide = createGlideGuide(scene);
-  const courseMarkers = createCourseMarkers(scene);
   const updateAir = createAirEffects(scene);
   const updateShadow = createWingShadow(scene, sun.position);
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -66,7 +64,6 @@ export function createScene(canvas) {
     world.hitsObstacle = (x, y, z) =>
       terrainObstacles(x, y, z) || rocks.hits(x, y, z);
     flight = createFlight(world, seed);
-    courseMarkers.generate(world, flight.gates);
     return {
       world,
       flight,
@@ -136,7 +133,6 @@ export function createScene(canvas) {
     }
     if (cockpit.group.visible)
       cockpit.update(s.left, s.right, s.trim, t, camera.aspect, camera.fov);
-    courseMarkers.update(s, preview);
     updateShadow(world, s, wing.canopy);
     if (preview) {
       const portrait = w / h < 1.1;
@@ -170,12 +166,6 @@ export function createScene(canvas) {
       // much of the approaching surface is visible on a diving entry.
       target.copy(eye).addScaledVector(forward, 25);
       target.y += 25 * Math.tan(gazePitch);
-      target.addScaledVector(
-        right,
-        reducedMotion.matches
-          ? 0
-          : THREE.MathUtils.clamp((s.bankRate ?? 0) * 0.38, -0.9, 0.9),
-      );
     } else {
       eye.copy(origin).addScaledVector(forward, -10.5);
       eye.y += 3.8;
