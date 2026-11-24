@@ -11,8 +11,8 @@ export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Develope
 target="$project/Ridgeline.uproject"
 mkdir -p "$project/Intermediate/SourceArt" "$project/Content/Flight"
 cp "$repo/src/flight.js" "$project/Content/Flight/flight.js"
-sips -s format jpeg "$repo/public/assets/meadow.webp" --out "$project/Intermediate/SourceArt/Meadow.jpg" >/dev/null
-sips -s format jpeg "$repo/public/assets/cliff.webp" --out "$project/Intermediate/SourceArt/Cliff.jpg" >/dev/null
+sips -s format jpeg "$project/Art/meadow.webp" --out "$project/Intermediate/SourceArt/Meadow.jpg" >/dev/null
+sips -s format jpeg "$project/Art/cliff.webp" --out "$project/Intermediate/SourceArt/Cliff.jpg" >/dev/null
 "$engine/Engine/Build/BatchFiles/Mac/Build.sh" RidgelineEditor Mac Development -Project="$target" -WaitMutex
 rm -f "$project/Intermediate/art-ready"
 "$engine/Engine/Binaries/Mac/UnrealEditor-Cmd" "$target" -unattended -nosplash -stdout \

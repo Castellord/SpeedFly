@@ -1,5 +1,4 @@
 import "./style.css";
-import { useCompactArt, watchFlightArt } from "./flight-art.js";
 import { createScene } from "./scene.js";
 import { icons, createMap, drawCompass } from "./instruments.js";
 import { createSound } from "./audio.js";
@@ -143,7 +142,7 @@ const nextPaint = () =>
 function loadingStage(label, step) {
   $("loadStage").textContent = label;
   $("loadProgress").value = step;
-  $("loadStep").textContent = step + " / 4";
+  $("loadStep").textContent = step + " / 3";
 }
 
 async function generated(newSeed, newNumber) {
@@ -160,23 +159,10 @@ async function generated(newSeed, newNumber) {
       : lineNames[1 + (seed % (lineNames.length - 1))];
   const line = scene.generate(seed);
   ({ world, flight } = line);
-  loadingStage("Загрузка моделей и текстур", 2);
-  const stopProgress = watchFlightArt((done, total) => {
-    $("loadStage").textContent =
-      "Загрузка моделей и текстур · " + done + " из " + total;
-    $("loadProgress").value = 1 + done / total;
-    $("compactLoad").hidden = done === total;
-  });
-  try {
-    await line.ready;
-  } finally {
-    stopProgress();
-    $("compactLoad").hidden = true;
-  }
-  loadingStage("Подготовка графики", 3);
+  loadingStage("Подготовка графики", 2);
   await nextPaint();
   await scene.warmup();
-  loadingStage("Подготовка приборов", 4);
+  loadingStage("Подготовка приборов", 3);
   await nextPaint();
   const stations = Math.ceil(Math.abs(world.finishZ) / 40);
   const route = Array.from({ length: stations + 1 }, (_, i) => {
@@ -662,10 +648,6 @@ function frame(now) {
   }
   requestAnimationFrame(frame);
 }
-$("compactLoad").onclick = () => {
-  useCompactArt();
-  $("compactLoad").disabled = true;
-};
 $("retryLoad").onclick = () => location.reload();
 requestAnimationFrame(async () => {
   try {

@@ -8,7 +8,7 @@
 
 ## Первый полёт
 
-При подготовке линии игра показывает, сколько из семи файлов графики готово. **«Быстрый старт»** берёт недостающие модели и текстуры из компактного набора внутри игры. Через 12 секунд ожидания игра делает это автоматически.
+При старте браузер строит альпийскую миниатюру по seed линии и готовит её к отрисовке. Модели деревьев и валунов, окраска лугов и небо создаются на устройстве.
 
 Нажми **«Начать полёт»**. Полёт начинается из подвески в 11 м над землёй. Крыло направлено вдоль склона, триммеры полностью открыты. Короткими нажатиями клевант поправляй курс. Высотомер показывает запас до склона прямо под пилотом, вариометр — вертикальную скорость.
 
@@ -56,10 +56,8 @@ npm run dev
 
 ## Графика и материалы
 
-Купол из 27 ячеек, деформация задней кромки, каскады строп, пилот, рельеф и растительность построены процедурно. Сцену рисует Three.js. Статические ресурсы поставляются вместе с игрой.
+Купол из 27 ячеек, каскады строп, пилот и подвеска, хвойные рощи, округлые валуны и скальные шпили построены процедурно. Цвета граней, тени на склонах и светлые берега помогают различать рельеф у земли. Панорама неба и узор купола создаются в Canvas при запуске. Сцену рисует Three.js.
 
-- Панорама неба — Greg Zaal и Jarod Guest, CC0. [Kloofendal 48d Partly Cloudy (Pure Sky)](https://polyhaven.com/a/kloofendal_48d_partly_cloudy_puresky)
-- Текстура высокогорного грунта — Rob Tuytel, CC0. [Aerial Grass Rock](https://polyhaven.com/a/aerial_grass_rock)
-- Текстура скал — Dario Barresi и Rico Cilliers, CC0. [Rock Face 03](https://polyhaven.com/a/rock_face_03)
-- Фотограмметрические модели валунов — Rico Cilliers и Jenelle van Heerden, CC0. [Boulder 01](https://polyhaven.com/a/boulder_01) · [Rock 09](https://polyhaven.com/a/rock_09)
+Отдельная версия для macOS использует материалы Poly Haven под CC0. Текстуры грунта и скал подготовили Rob Tuytel, Dario Barresi и Rico Cilliers. Авторы исходных фотограмметрических валунов — Rico Cilliers и Jenelle van Heerden. [Aerial Grass Rock](https://polyhaven.com/a/aerial_grass_rock) · [Rock Face 03](https://polyhaven.com/a/rock_face_03) · [Boulder 01](https://polyhaven.com/a/boulder_01) · [Rock 09](https://polyhaven.com/a/rock_09)
+
 - Шрифты Manrope, Oswald и Barlow Condensed распространяются по SIL Open Font License. Копии лицензий находятся в `public/assets/fonts/`.

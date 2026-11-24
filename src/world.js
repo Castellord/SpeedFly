@@ -1,6 +1,5 @@
 import { createPassSound } from "./pass-sound.js";
 import { createValleyMist } from "./air-effects.js";
-import { flightTexture } from "./textures.js";
 import * as THREE from "three";
 import { createVegetation } from "./vegetation.js";
 
@@ -103,10 +102,6 @@ function landMaterial() {
         atlas: { value: null },
         sun: { value: sunlight },
         time: { value: 0 },
-        meadowPhoto: { value: null },
-        cliffPhoto: { value: null },
-        haveMeadow: { value: 0 },
-        haveCliff: { value: 0 },
         snowline: { value: 1990 },
       },
     ]),
@@ -133,131 +128,65 @@ function landMaterial() {
     fragmentShader: `
       #include <fog_pars_fragment>
       uniform sampler2D atlas;
-      uniform sampler2D meadowPhoto;
-      uniform sampler2D cliffPhoto;
-      uniform float haveMeadow;
-      uniform float haveCliff;
-      uniform float snowline;
+      uniform float snowline, time;
+      uniform vec3 sun;
+      varying vec3 pos, slope;
+      varying vec4 env;
       varying vec2 creek;
       varying float exposureRock;
-      uniform vec3 sun;
-      uniform float time;
-      varying vec3 pos;
-      varying vec3 slope;
-      varying vec4 env;
-      const vec3 luma = vec3(.27,.55,.18);
-      vec3 granite(vec3 p, vec3 w) {
-        return texture2D(cliffPhoto,p.zy).rgb*w.x + texture2D(cliffPhoto,p.xz).rgb*w.y
-             + texture2D(cliffPhoto,p.xy).rgb*w.z;
+
+      float hash(vec2 p) {
+        vec3 v = fract(p.xyx * vec3(.1031,.11369,.13787));
+        v += dot(v, v.yzx + 19.19);
+        return fract((v.x + v.y) * v.z);
       }
       void main() {
-        vec3 n = normalize(slope);
         vec3 face = normalize(cross(dFdx(pos), dFdy(pos)));
-        n = normalize(mix(n, face, .25));
-        // Slanted projections keep cliff faces textured even on vertical rock.
-        vec2 uv = pos.xz + pos.y * vec2(.52, -.83);
-        vec3 broad = texture2D(atlas, uv / 750.).rgb;
-        vec3 rock = texture2D(atlas, vec2(pos.x * .81 - pos.z * .55, pos.y * 2.6 + pos.z * .3) / 120.).rgb;
-        vec3 flake = texture2D(atlas, uv / 27.).rgb;
-        float mottling = broad.r - .5;
-        float fine = flake.g - .5;
-        float relief = env.x;
+        vec3 n = normalize(mix(face, normalize(slope), .14));
         float steep = 1. - max(n.y, 0.);
-        float mineral = smoothstep(.12, .36, steep + mottling * .19 + relief * .00009);
-        mineral=max(mineral,smoothstep(.03,.88,exposureRock+(rock.r-.50)*.36));
-        float nearDetail=1.-smoothstep(25.,175.,length(cameraPosition-pos));
-        float trees = env.y * smoothstep(-.12, .08, mottling + env.y * .13);
-        vec3 meadow = mix(vec3(.49,.52,.30), vec3(.65,.62,.42), broad.g);
-        meadow = mix(meadow, vec3(.255,.335,.245), trees * .77);
-        meadow += mottling * vec3(.32,.27,.20) + fine * .09;
-        vec3 stone = mix(vec3(.355,.385,.404), vec3(.61,.575,.518), broad.r + mottling * .70);
-        float fissure = smoothstep(.63, .94, rock.b) * smoothstep(.46, .78, rock.r);
-        float seam = texture2D(atlas, vec2(pos.x * .33 + pos.z*.63, pos.y*2.1+pos.x*.27+pos.z*.43) / 47.).r;
-        stone += (rock.g-.5) * .34 + fine*.19 - fissure*.155 + (seam-.5)*.13;
-        if(haveMeadow > .5 && mineral < .99) {
-          mat2 twist = mat2(.83,.557,-.557,.83);
-          vec3 small = texture2D(meadowPhoto,pos.xz/14.8 + broad.rg*.19).rgb;
-          vec3 pasture = texture2D(meadowPhoto,twist*pos.xz/107. + broad.gb*.37).rgb;
-          vec3 photo = mix(small,pasture,.47);
-          if(nearDetail>.001){
-            vec3 turf=texture2D(meadowPhoto,twist*pos.xz/1.8).rgb;
-            photo*=mix(vec3(1.),.60+turf*1.14,nearDetail*.72);
-          }
-          float tone = dot(photo,luma);
-          vec3 pigment = mix(vec3(.36,.39,.24),vec3(.68,.67,.46),clamp(tone*1.65,0.,1.));
-          meadow = mix(meadow,pigment,.57) * (.40 + tone*1.45);
-          meadow += (photo-vec3(tone))*.36 + mottling*.12;
-          meadow *= 1.-trees*.22;
-        }
-        vec3 cliffGrain = rock;
-        if(haveCliff > .5 && mineral > .01) {
-          vec3 weights=pow(abs(n),vec3(4.));
-          weights/=max(.001,weights.x+weights.y+weights.z);
-          vec3 block = granite(pos*vec3(.89,1.16,.96)/143. + vec3(broad.rg,broad.b)*.31,weights);
-          vec3 chip = granite(pos*vec3(1.,1.28,.82)/26. + vec3(broad.b,broad.r,broad.g)*.19,weights);
-          cliffGrain = mix(block,chip,.45);
-          if(nearDetail>.001){
-            vec3 spall=granite(pos*vec3(1.,1.28,.82)/3.1,weights);
-            cliffGrain*=mix(vec3(1.),.57+spall*1.30,.78*nearDetail);
-          }
-          float tone=dot(cliffGrain,luma);
-          stone = mix(stone,vec3(.47,.485,.48)+mottling*.23,.48)*(.42+tone*1.47) + (cliffGrain-vec3(tone))*.52;
-        }
-        // Bedding follows a dipping plane, cutting across the face of each cliff.
-        float beds=pos.y*.097+pos.x*.025+pos.z*.034+(broad.g-.5)*3.7+(rock.r-.5)*.88;
-        float join=1.-smoothstep(.05,.22,abs(fract(beds)-.5));
-        stone*=1.-join*.035*smoothstep(.05,.35,steep);
-        vec3 surface = mix(meadow, stone, mineral);
-        // Snow follows local shelter and the rock's fissures, leaving bands
-        // of exposed strata even on the alpine faces beyond the course.
-        float exposure = pos.y - snowline + relief*.30 - n.x * 181. - n.z * 94.;
-        float snow = smoothstep(-24., 45., exposure - steep*1080. + mottling*620.
-                        + (rock.r-.5)*165. + (dot(cliffGrain,luma)-.46)*210.);
-        snow *= 1.-smoothstep(.19,.52,steep)*smoothstep(.04,.26,.45-rock.r)*.55;
-        vec3 ice = mix(vec3(.74,.80,.82), vec3(.985,.98,.95), broad.g + fine*.21 + rock.g*.11);
-        surface = mix(surface, ice, snow);
-        float width = 4.8 + 1.8*sin(pos.z*.0084) + 1.2*sin(pos.z*.019);
-        float mainChannel=abs(env.z +(flake.r-.5)*2.)/(width*max(.001,smoothstep(-5420.,-4350.,pos.z)));
-        float brookWidth=3.0+.83*sin(pos.z*.026)+1.25*(flake.g-.5);
-        float creekAxis=creek.x+(flake.g-.5)*2.+(rock.r-.5)*1.8;
-        float brook=abs(creekAxis)/(brookWidth*max(.001,creek.y));
+        vec2 uv = pos.xz + pos.y * vec2(.24, -.41);
+        float fieldTone = texture2D(atlas,uv/620.).r;
+        // Irregular triangular planes pick out the dip of the rock, even on a broad slab.
+        vec2 strata = vec2(pos.x*.048 + pos.z*.039, pos.y*.063 + pos.z*.017-pos.x*.014);
+        strata += .72 * texture2D(atlas,uv/190.).rg;
+        vec2 corner = floor(strata), f = fract(strata);
+        float facet = hash(corner + step(1.,f.x+f.y)*19.);
+        float strataContrast = 1.-smoothstep(300.,850.,length(pos-cameraPosition));
+        float grassTint = smoothstep(.26,.73,fieldTone);
+        vec3 meadow = mix(vec3(.57,.74,.34),vec3(.85,.85,.46),grassTint);
+        meadow *= 1.-env.y*.11;
+        float granite = max(smoothstep(.28,.43,steep),smoothstep(.78,.91,exposureRock));
+        vec3 stone = mix(vec3(.69,.61,.56),vec3(.88,.78,.65),smoothstep(.34,.68,fieldTone));
+        stone += (facet-.5)*vec3(.098,.088,.076)*strataContrast;
+        float snow = smoothstep(-12.,28.,pos.y-snowline - 540.*steep - n.x*70. + fieldTone*125.);
+        vec3 paint = mix(mix(meadow,stone,granite),vec3(.98,.965,.86),snow);
+        float sunward = dot(n,sun);
+        vec3 shade = mix(vec3(.69,.70,.79),vec3(1.055,1.035,.99),clamp(.39+.72*sunward,0.,1.));
+        paint *= shade * mix(vec3(.82,.85,.91),vec3(1.),env.w);
+
+        // A few small buttercups and grass strokes anchor the ground at flying height.
+        vec2 lawn = mat2(.8,-.6,.6,.8)*pos.xz*.63;
+        vec2 cell = floor(lawn);
+        float seed = hash(cell);
+        vec2 blade = fract(lawn)-(.23+.54*vec2(seed,hash(cell+11.)));
+        float width = max(.012, fwidth(lawn.x));
+        float mark = 1.-smoothstep(.085,.085+width,
+          abs(blade.x+.34*blade.y)+abs(blade.y)*.46);
+        float nearField = (1.-smoothstep(26.,72.,length(cameraPosition-pos)))
+          *(1.-granite)*(1.-snow);
+        paint = mix(paint,seed>.94 ? vec3(.98,.86,.49) : meadow*vec3(.73,.84,.69),
+          mark*nearField*smoothstep(.56,.8,seed)*.72);
+
+        float riverWidth=4.8+1.8*sin(pos.z*.0084)+1.2*sin(pos.z*.019);
+        float mainChannel=abs(env.z)/(riverWidth*max(.001,smoothstep(-5420.,-4350.,pos.z)));
+        float brook=abs(creek.x)/((3.+.83*sin(pos.z*.026))*max(.001,creek.y));
         float channel=min(mainChannel,brook);
-        float river=1.-smoothstep(.67,1.10,channel);
-        float riparian=1.-smoothstep(.80,3.52,channel);
-        vec3 bed=mix(vec3(.34,.35,.33),vec3(.60,.60,.54),flake.g);
-        if(haveCliff>.5 && riparian>.01) {
-          vec3 shingle=texture2D(cliffPhoto,pos.xz/4.55+rock.rg*.07).rgb;
-          bed=mix(bed,vec3(.19)+shingle*.71,.69);
-        }
-        surface=mix(surface,bed,riparian*.91);
-        if (river > .001) {
-          vec2 flowUV=vec2(pos.x*.15+sin(pos.z*.24)*.15,pos.z*.058+time*.085);
-          vec3 eddy=texture2D(atlas,flowUV).rgb;
-          float boil=smoothstep(.09,.43,steep)+.23*smoothstep(.51,.78,flake.g);
-          float foam=smoothstep(.55,.74,eddy.g+.16*boil+fine*.32);
-          vec3 water=mix(bed*.74,vec3(.21,.37,.36),.43+.38*(1.-smoothstep(.14,.78,channel)));
-          vec3 eye=normalize(cameraPosition-pos);
-          vec3 ripple=normalize(n+vec3((eddy.r-.5)*.46,0.,(eddy.g-.5)*.34));
-          float grazing=pow(1.-clamp(dot(ripple,eye),0.,1.),3.);
-          float glint=pow(max(dot(ripple,normalize(sun+eye)),0.),46.);
-          water=mix(water,vec3(.63,.74,.79),.48*grazing)+vec3(.70,.62,.48)*glint*env.w;
-          water=mix(water,vec3(.83,.86,.83),foam*(.28+.61*clamp(boil,0.,1.)));
-          surface=mix(surface,water,river);
-        }
-        // Let the scans carry fine relief. Differentiating their pixel luminance
-        // turns tiny colour changes into sparkling, near-binary surface normals.
-        float diffuse = max(dot(n,sun),0.);
-        float light = .70 + diffuse*.39;
-        vec3 lit = surface * light * mix(vec3(.84,.90,.99),vec3(1.055,1.02,.965),diffuse);
-        lit *= mix(vec3(.70,.76,.86),vec3(1.),env.w);
-        // Broad, drifting cloud shadows separate sunlit shoulders from the
-        // cooler valley floor. World-space sampling keeps them fixed on turns.
-        float cloud=texture2D(atlas,(pos.xz+pos.y*.19*sun.xz+time*vec2(.9,.35))/1640.).r;
-        lit *= mix(vec3(.79,.85,.93),vec3(1.07,1.045,1.005),smoothstep(.40,.57,cloud));
-        float distanceHaze = (1.-exp(-length(pos-cameraPosition)*.00015))
-          * (1.-smoothstep(1350.,2580.,pos.y));
-        lit = mix(lit,vec3(.68,.77,.81),distanceHaze*.63);
-        gl_FragColor = vec4(pow(max(lit,vec3(.001)),vec3(2.2)),1.);
+        paint=mix(paint,vec3(.84,.81,.64)*shade,1.-smoothstep(.95,1.36,channel));
+        float ripples = texture2D(atlas, pos.xz*vec2(.075,.17)+vec2(0.,time*.065)).g;
+        vec3 water=mix(vec3(.20,.65,.69),vec3(.47,.84,.79),smoothstep(.20,.95,channel));
+        water=mix(water,vec3(.88,.98,.88),smoothstep(.65,.71,ripples)*.72);
+        paint=mix(paint,water,1.-smoothstep(.90,1.,channel));
+        gl_FragColor=vec4(pow(max(paint,vec3(.001)),vec3(2.2)),1.);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
         #include <fog_fragment>
@@ -499,6 +428,57 @@ function crags({
         (rng() - 0.5) * 0.83,
       );
   }
+  // Broken granite needles share the triangle list used for terrain contacts.
+  // Their offset leaves the gliding corridor clear even at the widest base.
+  function pinnacle(x, z, radius, rise) {
+    const key = Math.floor(z / 430);
+    if (!strips.has(key)) strips.set(key, { positions: [] });
+    const batch = strips.get(key);
+    const base = groundHeight(x, z);
+    const profile = Array.from({ length: 7 }, (_, i) => {
+      const angle = ((i + rng() * 0.34) * Math.PI * 2) / 7;
+      return [
+        Math.cos(angle) * (0.73 + 0.27 * rng()),
+        Math.sin(angle) * (0.66 + 0.19 * rng()),
+        rng(),
+      ];
+    });
+    const ring = (scale, level) =>
+      profile.map(([u, v, t]) => {
+        const px = x + radius * (u * scale + 0.27 * level),
+          pz = z + radius * (v * scale - 0.15 * level);
+        return [
+          px,
+          level === 0
+            ? groundHeight(px, pz) - 3
+            : base + rise * (level + (t - 0.5) * 0.17),
+          pz,
+        ];
+      });
+    const foot = ring(1, 0),
+      shoulder = ring(0.58, 0.49),
+      crest = ring(0.21, 0.84);
+    const tip = [x + radius * 0.32, base + rise, z - radius * 0.09];
+    for (let i = 0; i < 7; i++) {
+      const j = (i + 1) % 7;
+      for (const [lo, hi] of [
+        [foot, shoulder],
+        [shoulder, crest],
+      ]) {
+        face(batch, lo[i], hi[i], lo[j]);
+        face(batch, lo[j], hi[i], hi[j]);
+      }
+      face(batch, crest[i], tip, crest[j]);
+    }
+  }
+  for (let z = -192; z > -4050; z -= 390 + 230 * rng()) {
+    const side = rng() > 0.5 ? 1 : -1;
+    const x = center(z) + side * (110 + 65 * rng());
+    const rise = 65 + 68 * rng();
+    pinnacle(x, z, 31 + 15 * rng(), rise);
+    pinnacle(x + side * 21, z + 26, 23, rise * 0.64);
+    pinnacle(x - side * 18, z - 32, 20, rise * 0.45);
+  }
   for (const { positions } of strips.values()) {
     const g = new THREE.BufferGeometry(),
       habitat = [],
@@ -611,6 +591,87 @@ function addScree(world, center, height, rng, section, wallSide, lips) {
       side = rng() < 0.5 ? -1 : 1;
     patch(z, q.bend + wallSide * q.brook + side * (2.1 + rng() * 2.4), true);
   }
+  // Small clumps give a low pass a metre-scale reference. Each meadow patch
+  // is one instanced draw, with ochre flower heads and folded blades in one mesh.
+  const blades = [],
+    pigments = [];
+  function petal(a, b, c, hex) {
+    blades.push(...a, ...b, ...c);
+    const tint = new THREE.Color(hex);
+    for (let i = 0; i < 3; i++) pigments.push(tint.r, tint.g, tint.b);
+  }
+  for (let i = 0; i < 8; i++) {
+    const a = i * 2.4,
+      x = Math.cos(a) * 0.27,
+      z = Math.sin(a) * 0.27;
+    const base = [x, -0.12, z],
+      tip = [x * 1.65, 0.22 + (i % 3) * 0.085, z * 1.65];
+    petal(base, [x + 0.07, 0.09, z + 0.04], tip, 0x719849);
+    petal(base, tip, [x - 0.07, 0.08, z - 0.02], 0x97ae4e);
+  }
+  for (const [x, y, z] of [
+    [0, 0.4, 0],
+    [0.19, 0.28, -0.16],
+    [-0.17, 0.35, 0.13],
+  ]) {
+    petal([x - 0.022, -0.07, z], [x + 0.028, -0.07, z], [x, y, z], 0x698a43);
+    for (let i = 0; i < 5; i++) {
+      const a = (i * Math.PI * 2) / 5,
+        b = ((i + 1) * Math.PI * 2) / 5;
+      petal(
+        [x, y + 0.045, z],
+        [x + 0.089 * Math.cos(a), y, z + 0.089 * Math.sin(a)],
+        [x + 0.089 * Math.cos(b), y, z + 0.089 * Math.sin(b)],
+        i % 3 ? 0xffea99 : 0xffca57,
+      );
+    }
+  }
+  const flowerGeometry = new THREE.BufferGeometry();
+  flowerGeometry.setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute(blades, 3),
+  );
+  flowerGeometry.setAttribute(
+    "color",
+    new THREE.Float32BufferAttribute(pigments, 3),
+  );
+  flowerGeometry.computeVertexNormals();
+  const flowerMaterial = new THREE.MeshLambertMaterial({
+    vertexColors: true,
+    side: THREE.DoubleSide,
+  });
+  for (let z = 90; z > -3390; z -= 36 + 27 * rng()) {
+    const side = rng() < 0.5 ? -1 : 1;
+    const x = center(z) + side * (3 + 19 * rng()),
+      batch = new THREE.InstancedMesh(flowerGeometry, flowerMaterial, 30);
+    let count = 0;
+    for (let j = 0; j < 30; j++) {
+      const px = x + (rng() - 0.5) * 13,
+        pz = z + (rng() - 0.5) * 18;
+      const q = section(pz),
+        v = (px - center(pz)) * wallSide;
+      if (
+        Math.abs(v + q.stream) < 7 ||
+        (q.active > 0.1 && Math.abs(v - q.brook) < 4)
+      )
+        continue;
+      const y = height(px, pz);
+      if (
+        Math.abs(height(px + 1, pz) - y) > 0.66 ||
+        Math.abs(height(px, pz + 1) - y) > 0.85
+      )
+        continue;
+      pebble.position.set(px, y, pz);
+      pebble.rotation.set(0, rng() * Math.PI * 2, 0);
+      pebble.scale.setScalar(0.71 + rng() * 0.85);
+      pebble.updateMatrix();
+      batch.setMatrixAt(count++, pebble.matrix);
+    }
+    batch.count = count;
+    batch.computeBoundingSphere();
+    world.add(batch);
+    patches.push({ x, z, batch });
+  }
   return {
     update(x, z) {
       for (const patch of patches)
@@ -620,6 +681,8 @@ function addScree(world, center, height, rng, section, wallSide, lips) {
     dispose() {
       geometry.dispose();
       material.dispose();
+      flowerGeometry.dispose();
+      flowerMaterial.dispose();
       for (const p of patches) p.batch.dispose();
     },
   };
@@ -1059,7 +1122,7 @@ export function createWorld(scene, seed) {
     const riverGrove = 0.22 * (1 - smooth(28, 155, Math.abs(x - river(z))));
     return (
       smooth(0.34, 0.68, grove + riverGrove) *
-      (1 - smooth(1390, 1860, y)) *
+      (1 - smooth(1950, 2510, y)) *
       smooth(0.63, 0.88, ny) *
       smooth(9, 22, Math.abs(x - river(z)))
     );
@@ -1085,15 +1148,7 @@ export function createWorld(scene, seed) {
   const atlas = groundAtlas(rng),
     material = landMaterial();
   material.uniforms.atlas.value = atlas;
-  material.uniforms.snowline.value = 1960 + 90 * Math.sin(phases[0]);
-  for (const name of ["meadow", "cliff"]) {
-    const texture = flightTexture(name + ".webp");
-    if (!texture) continue;
-    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-    texture.anisotropy = 8;
-    material.uniforms[name + "Photo"].value = texture;
-    material.uniforms[name === "meadow" ? "haveMeadow" : "haveCliff"].value = 1;
-  }
+  material.uniforms.snowline.value = start + 480 + 90 * Math.sin(phases[0]);
   // Neighbouring tiles share the vertex buffers. Frustum culling discards
   // mountains behind the pilot before their triangles reach the GPU.
   const tiles = [];

@@ -1,11 +1,11 @@
 import { createMotion } from "./motion.js";
 import { createGlideGuide } from "./glide-guide.js";
 import { createAirEffects } from "./air-effects.js";
-import { flightTexture, texturesReady } from "./textures.js";
+import { alpineSky } from "./sky.js";
 import * as THREE from "three";
 import { createWorld } from "./world.js";
 import { createWing, createCockpit } from "./wing.js";
-import { createScannedRocks } from "./scanned-rocks.js";
+import { createBoulders } from "./boulders.js";
 import { createWingShadow } from "./wing-shadow.js";
 import { createFlight } from "./flight.js";
 
@@ -19,11 +19,11 @@ export function createScene(canvas) {
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   const scene = new THREE.Scene(),
     camera = new THREE.PerspectiveCamera(55, 1, 0.15, 15500);
-  scene.background = new THREE.Color(0xb9d0db);
-  scene.fog = new THREE.Fog(0xb8cbd0, 1450, 10500);
+  scene.background = alpineSky();
+  scene.fog = new THREE.Fog(0xd5ded6, 1450, 10000);
   scene.backgroundRotation.y = 1.5;
-  scene.add(new THREE.HemisphereLight(0xe0f0ff, 0xa49a7b, 1.65));
-  const sun = new THREE.DirectionalLight(0xffe9c8, 2.1);
+  scene.add(new THREE.HemisphereLight(0xfff7dd, 0xb6b8aa, 1.74));
+  const sun = new THREE.DirectionalLight(0xffedcc, 2.15);
   sun.position.set(-0.64, 0.72, -0.26);
   scene.add(sun);
   const wing = createWing();
@@ -36,7 +36,7 @@ export function createScene(canvas) {
   const updateAir = createAirEffects(scene);
   const updateShadow = createWingShadow(scene, sun.position);
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
-  let scannedRocks,
+  let boulders,
     world,
     flight,
     ratio = 1,
@@ -51,15 +51,11 @@ export function createScene(canvas) {
     right = new THREE.Vector3(),
     origin = new THREE.Vector3();
   function generate(seed) {
-    const sky = flightTexture("sky.jpg");
-    sky.colorSpace = THREE.SRGBColorSpace;
-    sky.mapping = THREE.EquirectangularReflectionMapping;
-    scene.background = sky;
-    scannedRocks?.dispose();
+    boulders?.dispose();
     if (world) world.dispose();
     world = createWorld(scene, seed);
-    const rocks = createScannedRocks(scene, world, seed);
-    scannedRocks = rocks;
+    const rocks = createBoulders(scene, world, seed);
+    boulders = rocks;
     const terrainObstacles = world.hitsObstacle;
     world.hitsObstacle = (x, y, z) =>
       terrainObstacles(x, y, z) || rocks.hits(x, y, z);
@@ -67,7 +63,6 @@ export function createScene(canvas) {
     return {
       world,
       flight,
-      ready: Promise.all([rocks.ready, texturesReady()]),
     };
   }
   function draw({ mode, cameraMode, t, dt, snap, showGlide = false }) {
@@ -139,14 +134,14 @@ export function createScene(canvas) {
       const sway = Math.sin(t * 0.095) * 0.6;
       eye
         .copy(origin)
-        .addScaledVector(right, -0.9 + sway)
+        .addScaledVector(right, -5.0 + sway)
         .addScaledVector(forward, portrait ? -17 : -12);
-      eye.y += portrait ? 4.1 : 3.45;
+      eye.y += portrait ? 4.6 : 4.8;
       target
         .copy(origin)
         .addScaledVector(right, portrait ? -0.55 : -3.8)
         .addScaledVector(forward, 1.4);
-      target.y += portrait ? 0.3 : 1.65;
+      target.y += portrait ? 0.3 : 1.45;
     } else if (cameraMode === 1) {
       eye.copy(origin).addScaledVector(forward, 0.28);
       // The helmet follows the harness, including when it is inverted.
@@ -193,7 +188,7 @@ export function createScene(canvas) {
       Math.atan2(horizontal.x, -horizontal.z),
       t,
     );
-    scannedRocks.update(camera.position.x, camera.position.z);
+    boulders.update(camera.position.x, camera.position.z);
     updateAir(
       t,
       s.agl,

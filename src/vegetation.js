@@ -1,23 +1,29 @@
-import { flightTexture } from "./textures.js";
 import * as THREE from "three";
 
 const TAU = Math.PI * 2;
 const clamp = THREE.MathUtils.clamp;
-const mix = THREE.MathUtils.lerp;
 const v = (x, y, z) => new THREE.Vector3(x, y, z);
 const color = (hex) => new THREE.Color(hex);
 const sizeOfCell = 128;
 const species = [
-  { name: "Ель", crown: 0.222, base: 0.105, droop: 0.38, tiers: 15, boughs: 7 },
   {
-    name: "Лиственница",
-    crown: 0.22,
-    base: 0.235,
-    droop: 0.19,
-    tiers: 12,
-    boughs: 6,
+    crown: 0.244,
+    base: 0.14,
+    tiers: 4,
+    palette: [0x33715c, 0x43865e, 0x529965, 0x7ab776],
   },
-  { name: "Сосна", crown: 0.308, base: 0.31, droop: 0.1, tiers: 9, boughs: 6 },
+  {
+    crown: 0.225,
+    base: 0.22,
+    tiers: 3,
+    palette: [0x61883c, 0x81a344, 0x9eb84e],
+  },
+  {
+    crown: 0.31,
+    base: 0.27,
+    tiers: 3,
+    palette: [0x396e62, 0x4f9378, 0x79ad84],
+  },
 ];
 
 function random(seed) {
@@ -31,27 +37,17 @@ function random(seed) {
   };
 }
 
-function forestTexture(name) {
-  const map = flightTexture(name + ".webp");
-  if (!map) return null;
-  map.colorSpace = THREE.SRGBColorSpace;
-  map.anisotropy = 4;
-  return map;
-}
-
 class MeshData {
   constructor() {
     this.positions = [];
     this.normals = [];
     this.colors = [];
-    this.uv = [];
     this.indices = [];
   }
-  point(p, normal, c, uv = [0.905, 0.08]) {
+  point(p, normal, c) {
     this.positions.push(p.x, p.y, p.z);
     this.normals.push(normal.x, normal.y, normal.z);
     this.colors.push(c.r, c.g, c.b);
-    this.uv.push(uv[0], uv[1]);
     return this.positions.length / 3 - 1;
   }
   face(a, b, c) {
@@ -63,7 +59,6 @@ class MeshData {
       ["position", this.positions, 3],
       ["normal", this.normals, 3],
       ["color", this.colors, 3],
-      ["uv", this.uv, 2],
     ]) {
       g.setAttribute(name, new THREE.Float32BufferAttribute(arr, count));
     }
@@ -73,236 +68,66 @@ class MeshData {
   }
 }
 
-function tube(data, start, end, r1, r2, sides, tint, bark = false) {
-  const dir = end.clone().sub(start).normalize();
-  const cross = dir
-    .clone()
-    .cross(Math.abs(dir.y) > 0.9 ? v(1, 0, 0) : v(0, 1, 0))
-    .normalize();
-  const along = cross.clone().cross(dir).normalize();
-  const rings = [];
-  for (const [j, point, r] of [
-    [0, start, r1],
-    [1, end, r2],
-  ]) {
-    const ring = [];
-    for (let i = 0; i < sides; i++) {
-      const a = (i * TAU) / sides,
-        normal = cross
-          .clone()
-          .multiplyScalar(Math.cos(a))
-          .addScaledVector(along, Math.sin(a));
-      const uv = bark
-        ? [0.752 + (0.105 * i) / sides, 0.17 + ((point.y * 0.67) % 0.76)]
-        : undefined;
-      ring.push(
-        data.point(point.clone().addScaledVector(normal, r), normal, tint, uv),
-      );
-    }
-    rings[j] = ring;
-  }
-  for (let i = 0; i < sides; i++) {
-    const k = (i + 1) % sides;
-    data.face(rings[0][i], rings[1][i], rings[0][k]);
-    data.face(rings[0][k], rings[1][i], rings[1][k]);
-  }
-}
-
+// Each crown is made of overlapping folded skirts. The low, dark underside
+// separates the tiers when a pilot looks up from below the treetops.
 function conifer(type, variant, lod) {
-  const s = species[type],
-    rng = random(9469 + type * 239 + variant * 153);
-  const data = new MeshData();
-  const bendX = (rng() - 0.5) * (type === 2 ? 0.16 : 0.058),
-    bendZ = (rng() - 0.5) * 0.06;
-  const trunk = (y) =>
-    v(
-      bendX * y * y + 0.008 * Math.sin(y * 6 + variant) * y,
-      y,
-      bendZ * Math.max(0, y) ** 1.7,
-    );
-  const white = color(0xffffff),
-    bark = color(0xc1b09c);
-  const base = s.base + (variant - 0.5) * 0.035;
-  if (lod === 2) {
-    // Baked, view-dependent silhouettes integrate into the same branch geometry
-    // in the distance, where a full bough would project to a fraction of a pixel.
-    const column = type * 2 + variant;
-    for (let k = 0; k < 2; k++)
-      for (let n = 0; n < 2; n++) {
-        data.point(
-          v(n ? 0.39 : -0.39, k ? 1.035 : -0.037, 0),
-          v(0, 0, 1),
-          white,
-          [(column + (n ? 0.999 : 0.001)) / 6, 1 - (k ? 0.001 : 0.999) / 2],
-        );
-      }
-    data.face(0, 1, 2);
-    data.face(1, 3, 2);
-    return data.finish();
+  const tree = species[type];
+  const sides = [8, 6, 5][lod];
+  const rng = random(type * 17 + variant);
+  const positions = [],
+    colors = [];
+  function triangle(a, b, c, tint) {
+    positions.push(...a, ...b, ...c);
+    for (let j = 0; j < 3; j++) colors.push(tint.r, tint.g, tint.b);
   }
-  const stemSections = lod === 0 ? 5 : 2;
-  for (let i = 0; i < stemSections; i++) {
-    const y = i / stemSections;
-    tube(
-      data,
-      trunk(y - 0.008),
-      trunk((i + 1) / stemSections),
-      0.015 * (1 - y) + 0.0005,
-      0.015 * (1 - (i + 1) / stemSections) + 0.0004,
-      lod === 0 ? 7 : 4,
+  const bark = color(0x885c43);
+  for (let j = 0; j < 5; j++) {
+    const a = (TAU * j) / 5,
+      b = (TAU * (j + 1)) / 5;
+    triangle(
+      [0.032 * Math.cos(a), 0, 0.032 * Math.sin(a)],
+      [0, 0.68, 0],
+      [0.032 * Math.cos(b), 0, 0.032 * Math.sin(b)],
       bark,
-      true,
     );
   }
-  const tiers = lod === 0 ? s.tiers + variant : Math.ceil(s.tiers * 0.66);
-  for (let i = 0; i < tiers; i++) {
-    const u = (i + 0.02) / (tiers - 0.63),
-      y = mix(base, 0.984, u);
-    const fork = trunk(y),
-      rotation = rng() * TAU;
-    const spokes = Math.max(
-      3,
-      s.boughs - Math.floor(u * 2) - (lod === 1 ? 1 : 0),
-    );
-    const baseRadius =
-      s.crown *
-      Math.pow(1 - u, type === 2 ? 0.52 : 0.74) *
-      (0.88 + 0.12 * Math.sin(Math.min(1, u * 6) * Math.PI * 0.53));
-    for (let j = 0; j < spokes; j++) {
-      const a = rotation + ((j + rng() * 0.43) * TAU) / spokes;
-      const radial = v(Math.cos(a), 0, Math.sin(a)),
-        side = v(-Math.sin(a), 0, Math.cos(a));
-      const length = baseRadius * (0.77 + 0.41 * rng());
-      const width =
-        length *
-        (type === 2 ? 0.25 : type === 1 ? 0.24 : 0.23) *
-        (lod === 1 ? 1.58 : 1);
-      const sag = length * s.droop;
-      const offset = length * (rng() - 0.5) * 0.3;
-      const lift =
-        length *
-        (type === 2 ? 0.09 : type === 1 ? 0.035 : 0.0) *
-        (0.5 + rng() * 0.84);
-      const rootPos = fork
-        .clone()
-        .add(v(0, (rng() - 0.5) * (0.039 + 0.042 * (1 - u)), 0));
-      const branch = (t) =>
-        rootPos
-          .clone()
-          .addScaledVector(radial, t * length)
-          .addScaledVector(side, offset * t * t)
-          .add(
-            v(
-              0,
-              -sag * (0.83 * t + 0.33 * Math.sin(t * Math.PI)) + lift * t * t,
-              0,
-            ),
-          );
-      if (lod === 0 && (i < tiers * 0.65 || j % 2 === 0)) {
-        tube(
-          data,
-          rootPos,
-          branch(0.47),
-          0.0045 * (1 - u) + 0.0012,
-          0.0016,
-          3,
-          color(0x746046),
-        );
-      }
-      const row = (j + i + variant) % 2,
-        cols = lod === 0 ? 4 : 2;
-      const tint = white
-        .clone()
-        .multiplyScalar(
-          (0.65 + 0.29 * (i / (tiers - 1)) + 0.16 * rng()) *
-            (type === 1 ? 1.12 : 1),
-        );
-      const strips = [];
-      for (let step = 0; step <= cols; step++) {
-        const t = step / cols;
-        const center = branch(t),
-          ring = [];
-        for (const lateral of [-1, 0, 1]) {
-          const point = center.clone().addScaledVector(side, lateral * width);
-          point.y -=
-            Math.abs(lateral) * width * (0.19 + 0.25 * Math.sin(t * Math.PI));
-          const n = radial
-            .clone()
-            .multiplyScalar(0.15)
-            .addScaledVector(side, lateral * 0.6)
-            .add(v(0, 0.93, 0))
-            .normalize();
-          const uv = [
-            (type + 0.012 + (0.5 + 0.49 * lateral) * 0.977) / 4,
-            1 - (row + 0.985 - t * 0.967) / 2,
-          ];
-          ring.push(data.point(point, n, tint, uv));
-        }
-        strips.push(ring);
-      }
-      for (let k = 0; k < cols; k++)
-        for (let n = 0; n < 2; n++) {
-          data.face(strips[k][n], strips[k][n + 1], strips[k + 1][n]);
-          data.face(strips[k][n + 1], strips[k + 1][n + 1], strips[k + 1][n]);
-        }
-      // Offshoots grow from the main branch into different planes: low spruce
-      // shoots hang down, larch fans hang loosely, and pine shoots turn upward.
-      const splits = lod === 0 ? 3 : 1;
-      for (let k = 0; k < splits; k++)
-        for (const flank of [-1, 1]) {
-          const at = 0.28 + ((k + 0.22 * rng()) * 0.53) / splits;
-          const start = branch(at);
-          const branchLength =
-            length * (0.49 - 0.23 * at) * (0.82 + 0.31 * rng());
-          const shoot = radial
-            .clone()
-            .multiplyScalar(0.48 + rng() * 0.2)
-            .addScaledVector(side, flank * (0.68 + rng() * 0.23))
-            .normalize();
-          const perpendicular = v(-shoot.z, 0, shoot.x);
-          const endY =
-            branchLength *
-            (type === 0
-              ? -0.76 - rng() * 0.35
-              : type === 1
-                ? -0.31 - rng() * 0.39
-                : -0.15 + rng() * 0.33);
-          const tip = start
-            .clone()
-            .addScaledVector(shoot, branchLength)
-            .add(v(0, endY, 0));
-          const half = branchLength * (type === 1 ? 0.27 : 0.31);
-          const n = v(shoot.x, 0.65, shoot.z).normalize(),
-            tone = tint.clone().multiplyScalar(0.9 + rng() * 0.17);
-          const strips = [],
-            segments = lod === 0 ? 2 : 1;
-          for (let q = 0; q <= segments; q++) {
-            const t = q / segments;
-            const axis = start.clone().lerp(tip, t);
-            axis.y -= Math.sin(Math.PI * t) * branchLength * 0.1;
-            const vertices = [];
-            for (const lateral of [-1, 1]) {
-              const p = axis
-                .clone()
-                .addScaledVector(perpendicular, half * lateral);
-              p.y += half * 0.17 * lateral * flank;
-              vertices.push(
-                data.point(p, n, tone, [
-                  (type + 0.5 + 0.48 * lateral) / 4,
-                  1 - (row + 0.97 - t * 0.94) / 2,
-                ]),
-              );
-            }
-            strips.push(vertices);
-          }
-          for (let j = 0; j < segments; j++) {
-            data.face(strips[j][0], strips[j][1], strips[j + 1][0]);
-            data.face(strips[j][1], strips[j + 1][1], strips[j + 1][0]);
-          }
-        }
+  const rise = 1 - tree.base;
+  const bend = variant ? -0.038 : 0.025;
+  for (let tier = 0; tier < tree.tiers; tier++) {
+    const frac = tier / tree.tiers;
+    const y = tree.base + frac * rise * 0.89;
+    const tipY =
+      tier === tree.tiers - 1
+        ? 1
+        : Math.min(0.99, y + rise * (0.53 - 0.09 * frac));
+    const radius = tree.crown * (1 - frac * 0.87);
+    const spin = rng() * 0.65;
+    const tint = color(tree.palette[tier]);
+    const rim = Array.from({ length: sides }, (_, i) => {
+      const a = spin + (TAU * i) / sides,
+        r = radius * (0.91 + 0.13 * rng());
+      return [
+        bend * y + r * Math.cos(a),
+        y + (0.04 * rng() - 0.017) * rise,
+        r * Math.sin(a),
+      ];
+    });
+    const apex = [bend * tipY, tipY, 0],
+      underside = [bend * y, y - 0.045 * (1 - frac), 0];
+    for (let i = 0; i < sides; i++) {
+      const j = (i + 1) % sides;
+      triangle(rim[i], apex, rim[j], tint);
+      triangle(rim[j], underside, rim[i], tint.clone().multiplyScalar(0.63));
     }
   }
-  return data.finish();
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute(positions, 3),
+  );
+  geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+  geometry.computeVertexNormals();
+  return geometry;
 }
 
 function stones(variant) {
@@ -430,53 +255,10 @@ export function createVegetation({
     root = new THREE.Group();
   root.name = "Альпийское редколесье";
   scene.add(root);
-  const atlas = forestTexture("conifer-branches");
-  const needles = new THREE.MeshLambertMaterial({
-    map: atlas,
+  const solid = new THREE.MeshLambertMaterial({
     vertexColors: true,
-    alphaTest: 0.25,
-    side: THREE.DoubleSide,
+    flatShading: true,
   });
-  // Soft transmission is important for boughs seen against the light.
-  needles.onBeforeCompile = (shader) => {
-    shader.fragmentShader = shader.fragmentShader.replace(
-      "#include <normal_fragment_begin>",
-      "#include <normal_fragment_begin>\nnormal *= gl_FrontFacing ? 1.0 : -1.0;",
-    );
-    shader.fragmentShader = shader.fragmentShader.replace(
-      "#include <opaque_fragment>",
-      "outgoingLight += diffuseColor.rgb * .16;\n#include <opaque_fragment>",
-    );
-  };
-  const solid = new THREE.MeshLambertMaterial({ vertexColors: true });
-  const distantMap = forestTexture("conifer-crowns");
-  const distant = new THREE.MeshBasicMaterial({
-    map: distantMap,
-    alphaTest: 0.24,
-    vertexColors: true,
-  });
-  distant.onBeforeCompile = (shader) => {
-    shader.vertexShader = shader.vertexShader.replace(
-      "#include <begin_vertex>",
-      `
-      #include <begin_vertex>
-      mat4 treeFrame=modelMatrix;
-      #ifdef USE_INSTANCING
-        treeFrame*=instanceMatrix;
-      #endif
-      vec3 eye=cameraPosition-treeFrame[3].xyz;
-      vec2 azimuth=vec2(dot(eye,normalize(treeFrame[0].xyz)),dot(eye,normalize(treeFrame[2].xyz)));
-      azimuth/=max(length(azimuth),.0001);
-      transformed.xz=vec2(position.x*azimuth.y,-position.x*azimuth.x);
-      #ifdef USE_MAP
-        float sideView=step(abs(azimuth.y),abs(azimuth.x));
-        vMapUv.y-=.5*sideView;
-        float facing=mix(azimuth.y,azimuth.x,sideView);
-        if(facing<0.) vMapUv.x=(2.*floor(vMapUv.x*6.)+1.)/6.-vMapUv.x;
-      #endif
-    `,
-    );
-  };
   const shadeMaterial = new THREE.MeshBasicMaterial({
     color: 0x2e382d,
     vertexColors: true,
@@ -495,7 +277,7 @@ export function createVegetation({
       assets.push(
         [0, 1, 2].map((lod) => ({
           geo: conifer(type, variant, lod),
-          mat: lod === 2 ? distant : needles,
+          mat: solid,
         })),
       );
     }
@@ -587,14 +369,14 @@ export function createVegetation({
       dz = (height(x, z + 4) - height(x, z - 4)) / 8;
     return [dx, dz, 1 / Math.hypot(1, dx, dz)];
   }
-  for (let i = 0; i < 57000; i++) {
+  for (let i = 0; i < 36000; i++) {
     const z = 900 - rng() * 6250,
       corridor = center(z),
-      x = corridor + (rng() - 0.5) * (i < 32000 ? 3200 : 1180);
+      x = corridor + (rng() - 0.5) * (i < 21000 ? 3200 : 1180);
     const gap = Math.abs(x - corridor);
     if (gap < 21 || Math.abs(x - stream(z)) < 12) continue;
     const y = height(x, z);
-    if (y > 1820) continue;
+    if (y > 2430) continue;
     const [dx, dz, ny] = slope(x, z);
     if (ny < 0.65) continue;
     const habitat = forest ? forest(x, z, y, ny) : 0.64;
@@ -657,7 +439,7 @@ export function createVegetation({
     );
   }
   // Isolated stands lean into the shoulders with open glades between them.
-  // Preserve space for the wing even where the gate centre wanders sideways.
+  // Leave clearance around the middle of the descent.
   for (let z = -26; z > -3260; z -= 63 + rng() * 92) {
     const side = rng() < 0.5 ? -1 : 1;
     const count = 2 + Math.floor(rng() * 4);
@@ -670,7 +452,7 @@ export function createVegetation({
         side * (10.5 + h * species[type].crown + rng() * 5 + i * 1.4);
       const y = height(x, pz),
         [dx, dz, ny] = slope(x, pz);
-      if (ny < 0.73 || y > 2010 || Math.abs(x - stream(pz)) < 6) continue;
+      if (ny < 0.73 || y > 2480 || Math.abs(x - stream(pz)) < 6) continue;
       place(
         type * 2 + (rng() < 0.5 ? 0 : 1),
         x,
@@ -825,8 +607,6 @@ export function createVegetation({
       });
       for (const levels of assets)
         for (const model of levels) model.geo.dispose();
-      distant.dispose();
-      needles.dispose();
       solid.dispose();
       shadeMaterial.dispose();
       shadowGeometry.dispose();

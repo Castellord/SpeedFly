@@ -1,18 +1,18 @@
 @font-face {
   font-family: Manrope;
-  src: url("/assets/fonts/manrope.ttf");
+  src: url("/assets/fonts/manrope.woff2") format("woff2");
   font-weight: 200 800;
   font-display: swap;
 }
 @font-face {
   font-family: Oswald;
-  src: url("/assets/fonts/oswald.ttf");
+  src: url("/assets/fonts/oswald.woff2") format("woff2");
   font-weight: 200 700;
   font-display: swap;
 }
 @font-face {
   font-family: Barlow;
-  src: url("/assets/fonts/brand.ttf");
+  src: url("/assets/fonts/brand.woff2") format("woff2");
   font-weight: 800;
   font-style: italic;
   font-display: swap;
@@ -628,9 +628,7 @@ body[data-mode="flying"] .ready:before {
   display: grid;
   place-items: center;
   background:
-    linear-gradient(180deg, #192923b3, #151d19db 62%, #121917ef),
-    url("./loading-sky.jpg?inline") center 51% / cover,
-    #19231f;
+    linear-gradient(158deg, #324e51, #253c32 52%, #162920);
 }
 .load-card {
   width: min(312px, calc(100% - 48px));
@@ -674,7 +672,6 @@ body[data-mode="flying"] .ready:before {
   font-size: 13px;
   color: #dbe2db;
 }
-#compactLoad,
 #retryLoad {
   margin-top: 14px;
 }
