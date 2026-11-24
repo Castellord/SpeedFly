@@ -1,14 +1,17 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
+import { loadFlightArt } from "./flight-art.js";
+
 let scans;
 function loadScans() {
   if (scans) return scans;
   const loader = new GLTFLoader();
   scans = Promise.all(
     ["boulder_01", "rock_09"].map(async (name) => {
-      const gltf = await loader.loadAsync(
-        import.meta.env.BASE_URL + "assets/models/" + name + "-lod.glb",
+      const gltf = await loadFlightArt(
+        "models/" + name + "-lod.glb",
+        async (blob) => loader.parseAsync(await blob.arrayBuffer(), ""),
       );
       const { geometry, material } = gltf.scene.getObjectByName("near");
       geometry.computeBoundingBox();

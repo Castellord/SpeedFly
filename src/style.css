@@ -629,7 +629,7 @@ body[data-mode="flying"] .ready:before {
   place-items: center;
   background:
     linear-gradient(180deg, #192923b3, #151d19db 62%, #121917ef),
-    url("/assets/sky.jpg") center 51% / cover,
+    url("./loading-sky.jpg?inline") center 51% / cover,
     #19231f;
 }
 .load-card {
@@ -674,6 +674,7 @@ body[data-mode="flying"] .ready:before {
   font-size: 13px;
   color: #dbe2db;
 }
+#compactLoad,
 #retryLoad {
   margin-top: 14px;
 }

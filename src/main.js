@@ -1,4 +1,5 @@
 import "./style.css";
+import { useCompactArt, watchFlightArt } from "./flight-art.js";
 import { createScene } from "./scene.js";
 import { icons, createMap, drawCompass } from "./instruments.js";
 import { createSound } from "./audio.js";
@@ -160,12 +161,18 @@ async function generated(newSeed, newNumber) {
   const line = scene.generate(seed);
   ({ world, flight } = line);
   loadingStage("Загрузка моделей и текстур", 2);
-  await Promise.all([
-    line.ready,
-    document.fonts.load("600 16px Oswald"),
-    document.fonts.load("500 16px Manrope"),
-    document.fonts.load("italic 800 16px Barlow"),
-  ]);
+  const stopProgress = watchFlightArt((done, total) => {
+    $("loadStage").textContent =
+      "Загрузка моделей и текстур · " + done + " из " + total;
+    $("loadProgress").value = 1 + done / total;
+    $("compactLoad").hidden = done === total;
+  });
+  try {
+    await line.ready;
+  } finally {
+    stopProgress();
+    $("compactLoad").hidden = true;
+  }
   loadingStage("Подготовка графики", 3);
   await nextPaint();
   await scene.warmup();
@@ -655,6 +662,10 @@ function frame(now) {
   }
   requestAnimationFrame(frame);
 }
+$("compactLoad").onclick = () => {
+  useCompactArt();
+  $("compactLoad").disabled = true;
+};
 $("retryLoad").onclick = () => location.reload();
 requestAnimationFrame(async () => {
   try {
